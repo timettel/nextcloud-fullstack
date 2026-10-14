@@ -125,7 +125,9 @@ spec:
         name: data
         labels:
           app.kubernetes.io/component: roundcube-postgresql
-          {{- include "nextcloud-stack.labels" . | nindent 10 }}
+          app.kubernetes.io/managed-by: {{ .Release.Service }}
+          app.kubernetes.io/instance: {{ .Release.Name }}
+          app.kubernetes.io/part-of: {{ include "nextcloud-stack.name" . }}
       spec:
         accessModes: [ReadWriteOnce]
         resources:

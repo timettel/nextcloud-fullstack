@@ -17,8 +17,14 @@ case "$profile" in
     ;;
 esac
 
-domain="$(yq -r '.operator.domain' values.yaml)"
-workflow_label="$(yq -r '.operator.subdomains.workflow' values.yaml)"
+value_files=(values.yaml "values-${profile}.yaml")
+if [[ -f values-local.yaml ]]; then
+  value_files+=(values-local.yaml)
+fi
+
+effective_values=' . as $item ireduce ({}; . * $item) '
+domain="$(yq eval-all -r "$effective_values | .operator.domain" "${value_files[@]}")"
+workflow_label="$(yq eval-all -r "$effective_values | .operator.subdomains.workflow" "${value_files[@]}")"
 if [[ -n "$workflow_label" ]]; then
   workflow_host="${workflow_label}.${domain}"
 else
@@ -62,10 +68,14 @@ case "$publish_mode" in
     ;;
 esac
 
+helm_value_args=()
+for value_file in "${value_files[@]}"; do
+  helm_value_args+=(-f "$value_file")
+done
+
 helm upgrade --install "$release" . \
   --namespace "$namespace" \
-  -f values.yaml \
-  -f "values-${profile}.yaml" \
+  "${helm_value_args[@]}" \
   --set-string nextcloud.skeleton.image.repository="$repository" \
   --set-string nextcloud.skeleton.image.tag="$tag" \
   --set-string workflowengine.windmill.baseDomain="$workflow_host" \

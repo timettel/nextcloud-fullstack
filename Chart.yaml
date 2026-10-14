@@ -2,7 +2,7 @@ apiVersion: v2
 name: nextcloud-stack
 description: Nextcloud stack with Galera, Elasticsearch, EuroOffice, Talk, AppAPI HaRP, Windmill and Gateway API
 type: application
-version: 0.15.2
+version: 0.15.3
 appVersion: "35.0.1"
 dependencies:
   - name: windmill

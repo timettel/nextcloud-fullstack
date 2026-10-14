@@ -55,8 +55,11 @@ Only these passwords must be supplied explicitly:
 - `operator.admins.keycloak.password`
 
 The repository ships with `CHANGE_ME` placeholders. After inserting real
-credentials, treat the resulting values file as sensitive and keep it outside
-version control or protect it through an equivalent deployment workflow.
+credentials, put deployment-specific overrides in the ignored
+`values-local.yaml`. `deploy.sh` loads it after the selected deployment profile,
+so it can override both shared defaults and profile values without modifying
+tracked files. Treat this file as sensitive and include it in the host's secure
+configuration backup.
 
 MariaDB, Redis, Talk, Office, OIDC and other internal credentials are generated
 with cryptographically random values when their override is empty. Existing
@@ -157,7 +160,7 @@ capacity. CPU limits throttle excess use; exceeding a memory limit can
 terminate the container with an OOM condition.
 
 Put environment-specific overrides in the selected profile or in an additional
-private values file. Applying them with `helm upgrade` updates the workload pod
+private `values-local.yaml` file. Applying them with `helm upgrade` updates the workload pod
 templates and Kubernetes replaces the affected pods using their controller's
 rollout strategy. Persistent volumes and application data are not recreated by
 a resource-only change.
@@ -171,6 +174,9 @@ hostname from the operator block and runs the Helm upgrade.
 ```bash
 DEPLOYMENT_PROFILE=test ./deploy.sh
 ```
+
+The effective values order is `values.yaml`, `values-<profile>.yaml`, then the
+optional ignored `values-local.yaml`.
 
 Useful environment overrides:
 

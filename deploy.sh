@@ -32,11 +32,27 @@ merged_value() {
 }
 
 domain="$(merged_value '.operator.domain')"
+monitoring_enabled="$(merged_value '.monitoring.enabled')"
 workflow_label="$(merged_value '.operator.subdomains.workflow')"
 if [[ -n "$workflow_label" ]]; then
   workflow_host="${workflow_label}.${domain}"
 else
   workflow_host="$domain"
+fi
+
+if [[ "$monitoring_enabled" == "true" ]]; then
+  monitoring_chart="$(find charts -maxdepth 1 -name 'kube-prometheus-stack-*.tgz' -print -quit)"
+  if [[ -z "$monitoring_chart" ]]; then
+    echo "Missing bundled kube-prometheus-stack chart; run helm dependency update" >&2
+    exit 1
+  fi
+
+  crd_dir="$(mktemp -d)"
+  tar -xzf "$monitoring_chart" -C "$crd_dir"
+  echo "Applying Prometheus Operator CRDs..."
+  kubectl apply --server-side --force-conflicts \
+    -f "$crd_dir/kube-prometheus-stack/charts/crds/crds"
+  rm -rf "$crd_dir"
 fi
 
 tag="$({

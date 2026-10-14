@@ -99,9 +99,9 @@ against Keycloak; only members of `monitoring.integration.allowedGroup`
 (`nc-admin` by default) are admitted and receive the Grafana administrator
 role.
 
-The upstream CRD upgrade hook is enabled so adding monitoring to an existing
-release and future Prometheus Operator CRD updates do not require a separate
-manual `kubectl apply` step.
+`deploy.sh` applies the bundled Prometheus Operator CRDs before Helm. This
+handles both adding monitoring to an existing release and future CRD schema
+updates without a separate manual `kubectl apply` step.
 
 The bundled overview dashboard covers pod readiness, restarts and OOM kills,
 CPU, memory, throttling, PVC requests, public endpoint latency and TLS

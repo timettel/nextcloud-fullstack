@@ -436,17 +436,6 @@ monitoring:
   enabled: true
   crds:
     enabled: true
-    # Helm does not upgrade CRDs itself. The upstream pre-upgrade hook keeps
-    # Prometheus Operator CRDs present and current for existing releases.
-    upgradeJob:
-      enabled: true
-      resources:
-        requests:
-          cpu: 10m
-          memory: 32Mi
-        limits:
-          cpu: 250m
-          memory: 256Mi
   integration:
     clientId: grafana
     allowedGroup: nc-admin

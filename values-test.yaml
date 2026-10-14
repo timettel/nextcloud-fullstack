@@ -42,3 +42,9 @@ monitoring:
 # k3s keeps its containerd socket below /run/k3s.
 checkmk:
   containerdOverride: /run/k3s/containerd/containerd.sock
+  nodeCollector:
+    cadvisor:
+      containerdSocket:
+        enabled: true
+        mountPath: /run/k3s/containerd/containerd.sock
+        hostPath: /run/k3s/containerd/containerd.sock

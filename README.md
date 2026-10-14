@@ -147,6 +147,25 @@ services work normally. Object-level piggyback hosts must be created manually
 or reconciled separately, for example by processing
 `cmk-piggyback list orphans` on the Checkmk site.
 
+For Checkmk Community sites, `scripts/checkmk-raw-piggyback-sync` provides this
+reconciliation. Install it in the site's `local/bin` directory and run it as
+the site user after configuring the Kubernetes special agent:
+
+```bash
+checkmk-raw-piggyback-sync <cluster-host> <cluster-name>
+```
+
+The script creates no-IP hosts for current Kubernetes piggyback objects,
+discovers services for new objects and removes objects after Checkmk has aged
+out their piggyback data. It activates Checkmk only when the generated host set
+changes. A five-minute cron or systemd timer is suitable for ongoing use.
+
+On cgroup v2 nodes, cAdvisor may also need direct access to the containerd
+socket. Configure `checkmk.nodeCollector.cadvisor.containerdSocket` with the
+runtime-specific socket path. The test profile includes the k3s path
+`/run/k3s/containerd/containerd.sock`; standard Kubernetes installations
+commonly use `/run/containerd/containerd.sock`.
+
 ## Deployment Profiles
 
 Exactly one profile must be selected:

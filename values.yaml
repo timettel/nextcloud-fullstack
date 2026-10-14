@@ -620,6 +620,12 @@ checkmk:
   nodeCollector:
     logLevel: warning
     cadvisor:
+      # Enable this for cgroup v2 nodes when cAdvisor needs the container
+      # runtime API to associate metrics with Kubernetes containers.
+      containerdSocket:
+        enabled: false
+        mountPath: /run/containerd/containerd.sock
+        hostPath: /run/containerd/containerd.sock
       resources:
         requests:
           cpu: 50m

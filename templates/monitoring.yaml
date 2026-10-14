@@ -35,7 +35,7 @@ metadata:
     {{- include "nextcloud-stack.labels" . | nindent 4 }}
 data:
   nextcloud-stack-overview.json: |-
-{{ .Files.Get "dashboards/nextcloud-stack-overview.json" | nindent 4 }}
+{{ .Files.Get "dashboards/nextcloud-stack-overview.json" | replace "__NAMESPACE__" .Release.Namespace | nindent 4 }}
 {{- if .Values.monitoring.blackboxExporter.enabled }}
 ---
 apiVersion: v1

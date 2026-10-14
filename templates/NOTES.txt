@@ -42,6 +42,9 @@ Enabled integrations
 {{- if .Values.monitoring.enabled }}
   Monitoring:  Prometheus, Alertmanager and Grafana; alerts to {{ .Values.monitoring.integration.alertEmail }}
 {{- end }}
+{{- if .Values.checkmk.enabled }}
+  Checkmk:     Kubernetes Cluster and Node Collectors (cluster {{ .Values.checkmk.clusterName }})
+{{- end }}
 {{- if .Values.keycloak.enabled }}
   OIDC:        Keycloak realm {{ .Values.keycloak.realm }}
 {{- if .Values.identityDirectory.enabled }}
@@ -66,3 +69,13 @@ EuroOffice
   Public URL:   https://{{ include "nextcloud-stack.host" (list . "office") }}/
   Internal URL: http://{{ include "nextcloud-stack.fullname" . }}-eurooffice/
   JWT secret:   Secret/{{ include "nextcloud-stack.fullname" . }}
+{{- if .Values.checkmk.enabled }}
+
+Checkmk collector
+  Service:      {{ include "nextcloud-stack.checkmkFullname" . }}-cluster-collector:{{ .Values.checkmk.clusterCollector.service.port }} ({{ .Values.checkmk.clusterCollector.service.type }})
+  Token Secret: {{ include "nextcloud-stack.checkmkFullname" . }}-checkmk
+  Retrieve token:
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "nextcloud-stack.checkmkFullname" . }}-checkmk -o jsonpath='{.data.token}' | base64 -d; echo
+  Retrieve CA:
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "nextcloud-stack.checkmkFullname" . }}-checkmk -o jsonpath='{.data.ca\.crt}' | base64 -d; echo
+{{- end }}

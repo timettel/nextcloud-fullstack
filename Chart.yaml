@@ -2,9 +2,13 @@ apiVersion: v2
 name: nextcloud-stack
 description: Nextcloud stack with Galera, Elasticsearch, EuroOffice, Talk, Windmill, monitoring and Gateway API
 type: application
-version: 0.16.6
+version: 0.17.0
 appVersion: "35.0.1"
 dependencies:
+  - name: checkmk
+    version: 1.12.1
+    repository: https://checkmk.github.io/checkmk_kube_agent
+    condition: checkmk.enabled
   - name: kube-prometheus-stack
     alias: monitoring
     version: 92.3.0

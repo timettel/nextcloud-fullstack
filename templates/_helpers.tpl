@@ -45,6 +45,19 @@
 {{- include "nextcloud-stack.host" (list . "phpmyadmin") -}}
 {{- end -}}
 
+{{- define "nextcloud-stack.checkmkFullname" -}}
+{{- if .Values.checkmk.fullnameOverride -}}
+{{- .Values.checkmk.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "checkmk" .Values.checkmk.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "nextcloud-stack.labels" -}}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/instance: {{ .Release.Name }}

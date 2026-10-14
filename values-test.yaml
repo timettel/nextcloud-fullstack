@@ -38,3 +38,7 @@ monitoring:
     enabled: false
   kubeProxy:
     enabled: false
+
+# k3s keeps its containerd socket below /run/k3s.
+checkmk:
+  containerdOverride: /run/k3s/containerd/containerd.sock

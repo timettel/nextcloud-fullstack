@@ -1,9 +1,12 @@
 dependencies:
+- name: checkmk
+  repository: https://checkmk.github.io/checkmk_kube_agent
+  version: 1.12.1
 - name: kube-prometheus-stack
   repository: oci://ghcr.io/prometheus-community/charts
   version: 92.3.0
 - name: windmill
   repository: https://windmill-labs.github.io/windmill-helm-charts/
   version: 4.0.280
-digest: sha256:13329262ef4ea9d5c9453f7175f64d8fc5847ca096dc0ea8eeb58488794f930e
-generated: "2026-10-14T21:14:29.791064+02:00"
+digest: sha256:4a55d60fcd0c8a7601bda8ac8e1986dc07fb36860c8793a02605c6abd595a382
+generated: "2026-10-14T22:41:22.551765+02:00"

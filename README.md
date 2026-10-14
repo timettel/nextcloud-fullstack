@@ -15,6 +15,7 @@ jobs.
 - Talk HPB, Coturn and Talk Recording
 - AppAPI HaRP and the Windmill workflow engine
 - LLDAP, Keycloak, Postfix/Dovecot, Roundcube and phpMyAdmin
+- optional Checkmk Kubernetes Cluster and Node Collectors
 - Gateway API routes and cert-manager certificates for all HTTP endpoints
 
 Every optional module has an `enabled` switch in its component section. The
@@ -114,6 +115,37 @@ sends firing and resolved notifications to `monitoring.integration.alertEmail`
 through the stack's mail service. Set `monitoring.enabled: false` to omit the
 complete monitoring subsystem, or disable only
 `monitoring.blackboxExporter.enabled` or `monitoring.alertmanager.enabled`.
+
+### Checkmk
+
+`checkmk.enabled` installs the official Checkmk Kubernetes Cluster Collector
+and Node Collectors. It does not install a Checkmk site: an existing external
+Checkmk server queries the Kubernetes API and collector with the generated
+service-account token. This keeps the deployment independent of Checkmk site,
+edition, network topology and DNS conventions.
+
+The collector service defaults to `ClusterIP`. Set
+`checkmk.clusterCollector.service.type` to `NodePort` and configure
+`nodePort`, or enable the upstream Ingress support, when the Checkmk server is
+outside the cluster. Restrict access with
+`checkmk.networkPolicy.allowIngressFromCIDRs` where the cluster network plugin
+enforces NetworkPolicy. Set `checkmk.containerdOverride` for distributions
+with a nonstandard socket; `values-test.yaml` supplies the k3s path.
+
+After deployment, `helm get notes` prints commands for retrieving the token and
+cluster CA. Configure a host without an IP address in Checkmk and assign the
+Kubernetes special agent using:
+
+- `checkmk.clusterName` as the cluster name
+- the externally reachable Kubernetes API endpoint
+- the generated service-account token and CA
+- the externally reachable Cluster Collector endpoint
+
+Checkmk Community includes the Kubernetes special agent and check plug-ins but
+not Dynamic Host Management or the commercial Kubernetes dashboards. Cluster
+services work normally. Object-level piggyback hosts must be created manually
+or reconciled separately, for example by processing
+`cmk-piggyback list orphans` on the Checkmk site.
 
 ## Deployment Profiles
 

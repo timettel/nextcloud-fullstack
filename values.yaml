@@ -581,6 +581,68 @@ monitoring:
         limits:
           cpu: "4"
           memory: 6Gi
+# Optional Checkmk Kubernetes integration. This deploys only the official
+# Cluster and Node Collectors; the external Checkmk site remains operator-owned.
+# The extra enabled and clusterName keys are consumed by this parent chart and
+# ignored by the upstream subchart.
+checkmk:
+  enabled: false
+  clusterName: nextcloud-stack
+  # Set for runtimes whose containerd socket is not at the upstream default.
+  # k3s is configured by values-test.yaml; production distributions can
+  # override this independently.
+  containerdOverride: ""
+  image:
+    tag: "1.12.1"
+  serviceAccount:
+    create: true
+  networkPolicy:
+    enabled: false
+    allowIngressFromCIDRs: []
+  clusterCollector:
+    logLevel: warning
+    cacheMaxsize: "50000"
+    service:
+      type: ClusterIP
+      port: 8080
+      # Used only when type is NodePort.
+      nodePort: 30035
+      annotations: {}
+    ingress:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  nodeCollector:
+    logLevel: warning
+    cadvisor:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    containerMetricsCollector:
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    machineSectionsCollector:
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
 fulltextsearch:
   enabled: true
   # The Nextcloud 35 connector contains clients for Elasticsearch 8 and 9.

@@ -13,6 +13,9 @@ Endpoints
 {{- if .Values.phpmyadmin.enabled }}
   phpMyAdmin: https://{{ include "nextcloud-stack.phpmyadminHost" . }}/
 {{- end }}
+{{- if .Values.monitoring.enabled }}
+  Grafana:    https://{{ include "nextcloud-stack.host" (list . "grafana") }}/
+{{- end }}
 {{- if .Values.identityDirectory.enabled }}
   LLDAP:      https://{{ include "nextcloud-stack.host" (list . "ldap") }}/
 {{- end }}
@@ -35,6 +38,9 @@ Enabled integrations
 {{- end }}
 {{- if .Values.workflowengine.enabled }}
   Workflow:    Windmill ({{ .Values.workflowengine.webhookWorkers }} webhook workers)
+{{- end }}
+{{- if .Values.monitoring.enabled }}
+  Monitoring:  Prometheus, Alertmanager and Grafana; alerts to {{ .Values.monitoring.integration.alertEmail }}
 {{- end }}
 {{- if .Values.keycloak.enabled }}
   OIDC:        Keycloak realm {{ .Values.keycloak.realm }}

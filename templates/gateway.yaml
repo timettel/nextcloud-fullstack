@@ -530,7 +530,7 @@ spec:
         {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
       {{- end }}
       backendRefs:
-        - name: {{ .Release.Name }}-monitoring-grafana
+        - name: {{ .Release.Name }}-grafana
           port: 80
 {{ end }}
 {{ if .Values.identityDirectory.enabled }}

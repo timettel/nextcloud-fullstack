@@ -133,6 +133,8 @@ nextcloud:
     defaultLocale: de_DE
     defaultPhoneRegion: DE
     defaultTimezone: Europe/Berlin
+    # Show Readme.md as a rich workspace above folder contents.
+    richWorkspacesEnabled: false
     # UTC hour at which the four-hour maintenance window starts (0-23).
     maintenanceWindowStart: 1
     # Unique integer per Nextcloud web/PHP server (0-511).

@@ -98,6 +98,7 @@ spec:
               php occ config:system:set default_locale --value="$DEFAULT_LOCALE"
               php occ config:system:set default_phone_region --value="$DEFAULT_PHONE_REGION"
               php occ config:system:set default_timezone --value="$DEFAULT_TIMEZONE"
+              php occ config:app:set text workspace_available --value="$RICH_WORKSPACES_ENABLED"
               php occ config:system:set maintenance_window_start --type=integer --value="$MAINTENANCE_WINDOW_START"
               php occ config:system:set serverid --type=integer --value="$SERVER_ID"
               php occ config:system:set mysql.utf8mb4 --type=boolean --value=true
@@ -808,6 +809,8 @@ spec:
               value: {{ .Values.nextcloud.systemConfig.defaultPhoneRegion | quote }}
             - name: DEFAULT_TIMEZONE
               value: {{ .Values.nextcloud.systemConfig.defaultTimezone | quote }}
+            - name: RICH_WORKSPACES_ENABLED
+              value: {{ ternary "1" "0" .Values.nextcloud.systemConfig.richWorkspacesEnabled | quote }}
             - name: MAINTENANCE_WINDOW_START
               value: {{ .Values.nextcloud.systemConfig.maintenanceWindowStart | quote }}
             - name: SERVER_ID

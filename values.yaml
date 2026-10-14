@@ -493,7 +493,7 @@ monitoring:
           key: grafana-oauth-client-secret
     grafana.ini:
       dashboards:
-        default_home_dashboard_path: /tmp/dashboards/nextcloud-stack-overview.json
+        default_home_dashboard_path: /etc/grafana/nextcloud-stack-overview.json
       auth:
         disable_login_form: true
       auth.generic_oauth:
@@ -517,10 +517,16 @@ monitoring:
     sidecar:
       dashboards:
         enabled: true
-        initDashboards: true
         label: grafana_dashboard
         labelValue: "1"
         searchNamespace: null
+    extraConfigmapMounts:
+      - name: nextcloud-stack-home-dashboard
+        mountPath: /etc/grafana/nextcloud-stack-overview.json
+        subPath: nextcloud-stack-overview.json
+        configMap: "{{ .Release.Name }}-nextcloud-stack-dashboard"
+        readOnly: true
+        optional: false
     resources:
       requests:
         cpu: 100m

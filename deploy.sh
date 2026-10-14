@@ -22,9 +22,17 @@ if [[ -f values-local.yaml ]]; then
   value_files+=(values-local.yaml)
 fi
 
-effective_values=' . as $item ireduce ({}; . * $item) '
-domain="$(yq eval-all -r "$effective_values | .operator.domain" "${value_files[@]}")"
-workflow_label="$(yq eval-all -r "$effective_values | .operator.subdomains.workflow" "${value_files[@]}")"
+merged_value() {
+  local query="$1"
+  if yq --version 2>&1 | grep -q mikefarah; then
+    yq eval-all -r ". as \$item ireduce ({}; . * \$item) | $query" "${value_files[@]}"
+  else
+    yq -r -s "reduce .[] as \$item ({}; . * \$item) | $query" "${value_files[@]}"
+  fi
+}
+
+domain="$(merged_value '.operator.domain')"
+workflow_label="$(merged_value '.operator.subdomains.workflow')"
 if [[ -n "$workflow_label" ]]; then
   workflow_host="${workflow_label}.${domain}"
 else

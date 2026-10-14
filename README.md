@@ -28,7 +28,7 @@ installations and upgrades.
 - cert-manager
 - mariadb-operator and its CRDs
 - Elastic Cloud on Kubernetes (ECK)
-- Helm and `yq`
+- Helm and either the Go or Python/jq implementation of `yq`
 - Docker for building the managed Nextcloud skeleton image
 - a default StorageClass; production additionally needs RWX storage for the
   shared Nextcloud application volume

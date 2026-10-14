@@ -604,6 +604,8 @@ whiteboard:
       memory: 2Gi
 clamav:
   enabled: true
+  # Concurrent clamd scan workers shared by all configured consumers.
+  maxThreads: 4
   image:
     repository: clamav/clamav
     tag: stable_base

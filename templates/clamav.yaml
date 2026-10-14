@@ -1,4 +1,11 @@
 {{- if .Values.clamav.enabled }}
+{{- $maxThreads := 4 }}
+{{- if hasKey .Values.clamav "maxThreads" }}
+{{- $maxThreads = int .Values.clamav.maxThreads }}
+{{- end }}
+{{- if lt $maxThreads 1 }}
+{{- fail "clamav.maxThreads must be at least 1" }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -54,7 +61,7 @@ spec:
             - name: CLAMD_CONF_ConcurrentDatabaseReload
               value: "no"
             - name: CLAMD_CONF_MaxThreads
-              value: "2"
+              value: {{ $maxThreads | quote }}
           ports:
             - name: clamd
               containerPort: 3310

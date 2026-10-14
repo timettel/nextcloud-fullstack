@@ -25,7 +25,7 @@ Access
 {{- end }}
 Enabled integrations
   notify_push: https://{{ include "nextcloud-stack.host" (list . "nextcloud") }}/push
-  ClamAV:      {{ include "nextcloud-stack.fullname" . }}-clamav:3310
+  ClamAV:      {{ include "nextcloud-stack.fullname" . }}-clamav:3310 ({{ default 4 .Values.clamav.maxThreads }} scan threads)
   Redis:       {{ .Values.redis.replicas }} nodes, Sentinel quorum {{ if eq (int .Values.redis.sentinel.quorum) 0 }}{{ include "nextcloud-stack.majority" .Values.redis.replicas }} (automatic){{ else }}{{ .Values.redis.sentinel.quorum }}{{ end }}
 {{- if .Values.fulltextsearch.enabled }}
   Search:      Elasticsearch {{ .Values.fulltextsearch.elasticsearch.version }} ({{ .Values.fulltextsearch.elasticsearch.replicas }} nodes)

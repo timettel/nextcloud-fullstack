@@ -125,6 +125,12 @@ Those values depend on workload, failure domains and the storage backend. For
 larger Elasticsearch deployments, replace the combined master/data/ingest node
 set with dedicated node sets rather than increasing it indefinitely.
 
+ClamAV scan concurrency is controlled independently through
+`clamav.maxThreads` and defaults to four. Size it together with the ClamAV CPU
+and memory limits and the number of consumers. More worker threads improve
+parallelism for simultaneous uploads and mail delivery, but do not create more
+CPU capacity.
+
 ## Install and Upgrade
 
 The supported entry point is `deploy.sh`. It builds the content of

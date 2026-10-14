@@ -111,4 +111,6 @@ spec:
                   key: phpmyadmin-oauth-client-secret
             - name: PHPMYADMIN_URL
               value: {{ printf "https://%s" $host | quote }}
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
 {{- end }}

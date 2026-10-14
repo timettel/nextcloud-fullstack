@@ -241,6 +241,8 @@ spec:
               readOnly: true
             - name: users
               mountPath: /bootstrap/user-configs
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
       volumes:
         - name: groups
           configMap:

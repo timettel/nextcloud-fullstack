@@ -158,6 +158,8 @@ spec:
           volumeMounts:
             - name: dovecot-masterdb
               mountPath: /masterdb
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
         - name: wait-for-certificate-and-generate-dkim
           image: "{{ .Values.mail.image.repository }}:{{ .Values.mail.image.tag }}"
           imagePullPolicy: {{ .Values.mail.image.pullPolicy }}
@@ -189,6 +191,8 @@ spec:
             - name: tls
               mountPath: /etc/dms-certs
               readOnly: true
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
       containers:
         - name: mail
           image: "{{ .Values.mail.image.repository }}:{{ .Values.mail.image.tag }}"

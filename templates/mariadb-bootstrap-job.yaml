@@ -59,9 +59,4 @@ spec:
                   name: {{ include "nextcloud-stack.fullname" . }}
                   key: mariadb-root-password
           resources:
-            requests:
-              cpu: 10m
-              memory: 32Mi
-            limits:
-              cpu: 250m
-              memory: 256Mi
+            {{- toYaml .Values.mariadb.bootstrap.resources | nindent 12 }}

@@ -44,12 +44,7 @@ spec:
             - name: nextcloud
               mountPath: /var/www/html
           resources:
-            requests:
-              cpu: 25m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
+            {{- toYaml .Values.workflowengine.webhookWorkerResources | nindent 12 }}
       volumes:
         - name: nextcloud
           persistentVolumeClaim:

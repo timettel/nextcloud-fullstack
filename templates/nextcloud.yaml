@@ -120,6 +120,8 @@ spec:
           volumeMounts:
             - name: php-session-config
               mountPath: /php-session
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
         {{- end }}
       containers:
         - name: nextcloud
@@ -327,6 +329,8 @@ spec:
                   subPath: ca.crt
                   readOnly: true
                 {{- end }}
+              resources:
+                {{- toYaml .Values.nextcloud.resources | nindent 16 }}
           volumes:
             - name: nextcloud
               persistentVolumeClaim:

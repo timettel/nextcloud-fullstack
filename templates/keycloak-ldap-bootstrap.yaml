@@ -215,4 +215,6 @@ spec:
             - name: ROUNDCUBE_URL
               value: "https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}"
             {{- end }}
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
 {{- end }}

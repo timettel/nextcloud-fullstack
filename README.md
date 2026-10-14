@@ -131,6 +131,37 @@ and memory limits and the number of consumers. More worker threads improve
 parallelism for simultaneous uploads and mail delivery, but do not create more
 CPU capacity.
 
+## Resource Tuning
+
+Every workload exposes Kubernetes CPU and memory requests and limits in
+`values.yaml`. Main containers use the component-level `resources` key, for
+example:
+
+```yaml
+nextcloud:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 6Gi
+```
+
+Sidecars and helper jobs have named resource blocks below their owning
+component, including `redis.sentinel.resources`,
+`phpmyadmin.oauth2Proxy.resources`, `nextcloud.bootstrap.resources` and
+`workflowengine.webhookWorkerResources`. Short-lived wait and configuration
+containers share `helperResources`. Requests influence scheduling and reserved
+capacity. CPU limits throttle excess use; exceeding a memory limit can
+terminate the container with an OOM condition.
+
+Put environment-specific overrides in the selected profile or in an additional
+private values file. Applying them with `helm upgrade` updates the workload pod
+templates and Kubernetes replaces the affected pods using their controller's
+rollout strategy. Persistent volumes and application data are not recreated by
+a resource-only change.
+
 ## Install and Upgrade
 
 The supported entry point is `deploy.sh`. It builds the content of

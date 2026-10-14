@@ -233,6 +233,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "nextcloud-stack.fullname" . }}
                   key: keycloak-database-password
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
       containers:
         - name: keycloak
           image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"

@@ -89,4 +89,6 @@ spec:
               value: {{ .Values.workflowengine.workspaceId | quote }}
             - name: WINDMILL_WORKSPACE_NAME
               value: {{ .Values.workflowengine.workspaceName | quote }}
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
 {{- end }}

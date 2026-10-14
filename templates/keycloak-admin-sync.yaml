@@ -77,6 +77,8 @@ spec:
               volumeMounts:
                 - name: nextcloud
                   mountPath: /var/www/html
+              resources:
+                {{- toYaml .Values.helperResources | nindent 16 }}
           volumes:
             - name: nextcloud
               persistentVolumeClaim:

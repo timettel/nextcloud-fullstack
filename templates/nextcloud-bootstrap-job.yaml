@@ -38,6 +38,8 @@ spec:
           volumeMounts:
             - name: nextcloud-skeleton
               mountPath: /export
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
       {{- end }}
       containers:
         - name: bootstrap
@@ -937,12 +939,7 @@ spec:
               readOnly: true
             {{- end }}
           resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: "1"
-              memory: 1Gi
+            {{- toYaml .Values.nextcloud.bootstrap.resources | nindent 12 }}
       volumes:
         - name: nextcloud
           persistentVolumeClaim:

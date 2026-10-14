@@ -182,6 +182,8 @@ spec:
                 secretKeyRef:
                   name: {{ $fullname }}
                   key: roundcube-database-password
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
       containers:
         - name: roundcube
           image: "{{ .Values.roundcube.image.repository }}:{{ .Values.roundcube.image.tag }}"

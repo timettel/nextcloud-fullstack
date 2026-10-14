@@ -114,6 +114,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
         secretKeyRef:
           name: {{ include "nextcloud-stack.fullname" . }}
           key: redis-password
+  resources:
+    {{- toYaml .Values.helperResources | nindent 4 }}
 {{- end -}}
 
 {{- define "nextcloud-stack.waitForNextcloud" -}}
@@ -132,6 +134,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
         sleep 5
       done
       echo "Nextcloud is ready"
+  resources:
+    {{- toYaml .Values.helperResources | nindent 4 }}
 {{- end -}}
 
 {{/* Strict majority for quorum-based components: floor(n / 2) + 1. */}}

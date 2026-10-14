@@ -226,12 +226,7 @@ spec:
             - name: data
               mountPath: /data
           resources:
-            requests:
-              cpu: 25m
-              memory: 32Mi
-            limits:
-              cpu: 250m
-              memory: 128Mi
+            {{- toYaml .Values.redis.sentinel.resources | nindent 12 }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -340,6 +335,8 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /haproxy
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
       containers:
         - name: haproxy
           image: "{{ .Values.redis.proxy.image.repository }}:{{ .Values.redis.proxy.image.tag }}"

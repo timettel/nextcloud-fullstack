@@ -60,6 +60,8 @@ spec:
                 - |
                   bin/elasticsearch-plugin list | grep -qx ingest-attachment || \
                     bin/elasticsearch-plugin install --batch ingest-attachment
+              resources:
+                {{- toYaml .Values.helperResources | nindent 16 }}
           {{- end }}
           containers:
             - name: elasticsearch

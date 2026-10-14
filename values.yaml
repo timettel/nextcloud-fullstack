@@ -71,6 +71,16 @@ operator:
     s3SecretKey: ""
 # Must be set to test or prod by the corresponding profile file.
 deploymentProfile: ""
+# Shared budget for short-lived wait, configuration and reconciliation
+# containers. Long-running application containers have component-specific
+# resource blocks below.
+helperResources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
 nextcloud:
   replicas: 2
   image:
@@ -186,6 +196,14 @@ nextcloud:
     limits:
       cpu: "2"
       memory: 3Gi
+  bootstrap:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
 mariadb:
   image:
     repository: mariadb
@@ -216,6 +234,14 @@ mariadb:
     limits:
       cpu: "2"
       memory: 2Gi
+  bootstrap:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
 redis:
   replicas: 3
   image:
@@ -234,6 +260,13 @@ redis:
     quorum: 0
     downAfterMilliseconds: 5000
     failoverTimeout: 60000
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 128Mi
   proxy:
     replicas: 2
     image:
@@ -379,6 +412,14 @@ phpmyadmin:
       limits:
         cpu: 250m
         memory: 128Mi
+  bootstrap:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
   resources:
     requests:
       cpu: 50m
@@ -469,6 +510,13 @@ workflowengine:
     - integration_windmill
   publicAccess: true
   webhookWorkers: 2
+  webhookWorkerResources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
   workspaceId: nextcloud
   workspaceName: Nextcloud Workflows
   postgresql:

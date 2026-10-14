@@ -441,6 +441,14 @@ monitoring:
     allowedGroup: nc-admin
     alertEmail: admin@example.com
     alertFrom: ""
+  alerts:
+    cpuThrottling:
+      enabled: true
+      # Require both a high throttled-period ratio and sustained use close to
+      # the CPU limit. This filters out mostly idle, short-burst containers.
+      periodRatioThreshold: 0.25
+      limitUtilizationThreshold: 0.8
+      for: 20m
   blackboxExporter:
     enabled: true
     image:

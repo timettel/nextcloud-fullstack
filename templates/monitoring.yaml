@@ -183,17 +183,28 @@ spec:
             severity: warning
           annotations:
             summary: "Container {{ `{{ $labels.container }}` }} in {{ `{{ $labels.pod }}` }} uses over 90% of its memory limit"
+        {{- if .Values.monitoring.alerts.cpuThrottling.enabled }}
         - alert: NextcloudStackContainerCPUThrottled
           expr: |
-            sum by (namespace,pod,container) (rate(container_cpu_cfs_throttled_periods_total{namespace={{ .Release.Namespace | quote }},container!=""}[5m]))
-            /
-            sum by (namespace,pod,container) (rate(container_cpu_cfs_periods_total{namespace={{ .Release.Namespace | quote }},container!=""}[5m]))
-            > 0.25
-          for: 20m
+            (
+              sum by (namespace,pod,container) (rate(container_cpu_cfs_throttled_periods_total{namespace={{ .Release.Namespace | quote }},container!=""}[5m]))
+              /
+              sum by (namespace,pod,container) (rate(container_cpu_cfs_periods_total{namespace={{ .Release.Namespace | quote }},container!=""}[5m]))
+              > {{ .Values.monitoring.alerts.cpuThrottling.periodRatioThreshold }}
+            )
+            and on(namespace,pod,container)
+            (
+              sum by (namespace,pod,container) (rate(container_cpu_usage_seconds_total{namespace={{ .Release.Namespace | quote }},container!="",image!=""}[5m]))
+              /
+              sum by (namespace,pod,container) (kube_pod_container_resource_limits{namespace={{ .Release.Namespace | quote }},resource="cpu",unit="core"} > 0)
+              > {{ .Values.monitoring.alerts.cpuThrottling.limitUtilizationThreshold }}
+            )
+          for: {{ .Values.monitoring.alerts.cpuThrottling.for }}
           labels:
             severity: warning
           annotations:
             summary: "Container {{ `{{ $labels.container }}` }} in {{ `{{ $labels.pod }}` }} is heavily CPU-throttled"
+        {{- end }}
     {{- if .Values.monitoring.blackboxExporter.enabled }}
     - name: nextcloud-stack.endpoints
       rules:
@@ -234,6 +245,11 @@ spec:
           - name: alertname
             matchType: =~
             value: Watchdog|InfoInhibitor
+      - receiver: discard
+        matchers:
+          - name: severity
+            matchType: =
+            value: info
   receivers:
     - name: discard
     - name: email

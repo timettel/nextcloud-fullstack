@@ -42,6 +42,16 @@ spec:
                 | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
               test -n "$realm_id"
 
+              echo "Applying the shared browser-session policy..."
+              "$KCADM" update "realms/$KEYCLOAK_REALM" \
+                -s accessTokenLifespan="$ACCESS_TOKEN_LIFESPAN" \
+                -s ssoSessionIdleTimeout="$SESSION_IDLE_TIMEOUT" \
+                -s ssoSessionMaxLifespan="$SESSION_MAX_LIFESPAN" \
+                -s ssoSessionIdleTimeoutRememberMe="$SESSION_IDLE_TIMEOUT" \
+                -s ssoSessionMaxLifespanRememberMe="$SESSION_MAX_LIFESPAN" \
+                -s clientSessionIdleTimeout=0 \
+                -s clientSessionMaxLifespan=0
+
               provider_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
                 -q name=lldap --fields id,name \
                 | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
@@ -243,6 +253,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "nextcloud-stack.fullname" . }}
                   key: keycloak-admin-password
+            - name: SESSION_IDLE_TIMEOUT
+              value: {{ .Values.operator.session.idleTimeoutSeconds | quote }}
+            - name: SESSION_MAX_LIFESPAN
+              value: {{ .Values.operator.session.maxLifespanSeconds | quote }}
+            - name: ACCESS_TOKEN_LIFESPAN
+              value: {{ .Values.operator.session.accessTokenLifespanSeconds | quote }}
             - name: LDAP_URL
               value: "ldap://{{ include "nextcloud-stack.fullname" . }}-lldap:389"
             - name: LDAP_USERS_DN

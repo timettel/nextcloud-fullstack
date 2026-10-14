@@ -15,6 +15,13 @@ data:
       "registrationAllowed": false,
       "resetPasswordAllowed": true,
       "rememberMe": true,
+      "accessTokenLifespan": {{ .Values.operator.session.accessTokenLifespanSeconds }},
+      "ssoSessionIdleTimeout": {{ .Values.operator.session.idleTimeoutSeconds }},
+      "ssoSessionMaxLifespan": {{ .Values.operator.session.maxLifespanSeconds }},
+      "ssoSessionIdleTimeoutRememberMe": {{ .Values.operator.session.idleTimeoutSeconds }},
+      "ssoSessionMaxLifespanRememberMe": {{ .Values.operator.session.maxLifespanSeconds }},
+      "clientSessionIdleTimeout": 0,
+      "clientSessionMaxLifespan": 0,
       "loginWithEmailAllowed": true,
       "duplicateEmailsAllowed": false,
       "groups": [

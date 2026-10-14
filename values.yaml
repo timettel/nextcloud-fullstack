@@ -37,6 +37,13 @@ operator:
     keycloak:
       username: admin
       password: CHANGE_ME
+  # Shared browser-session policy for Nextcloud, Keycloak and Roundcube.
+  # Access tokens stay short-lived and are renewed with refresh tokens.
+  session:
+    idleTimeoutSeconds: 28800
+    maxLifespanSeconds: 86400
+    accessTokenLifespanSeconds: 300
+    keepalive: true
   ldap:
     # Empty derives dc=lab,dc=ettel,dc=net from operator.domain.
     baseDn: ""

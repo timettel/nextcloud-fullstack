@@ -98,6 +98,9 @@ spec:
               php occ config:system:set default_locale --value="$DEFAULT_LOCALE"
               php occ config:system:set default_phone_region --value="$DEFAULT_PHONE_REGION"
               php occ config:system:set default_timezone --value="$DEFAULT_TIMEZONE"
+              php occ config:system:set session_lifetime --type=integer --value="$SESSION_IDLE_TIMEOUT"
+              php occ config:system:set session_keepalive --type=boolean --value="$SESSION_KEEPALIVE"
+              php occ config:system:set remember_login_cookie_lifetime --type=integer --value="$SESSION_MAX_LIFESPAN"
               php occ config:app:set text workspace_available --value="$RICH_WORKSPACES_ENABLED"
               php occ config:system:set maintenance_window_start --type=integer --value="$MAINTENANCE_WINDOW_START"
               php occ config:system:set serverid --type=integer --value="$SERVER_ID"
@@ -809,6 +812,12 @@ spec:
               value: {{ .Values.nextcloud.systemConfig.defaultPhoneRegion | quote }}
             - name: DEFAULT_TIMEZONE
               value: {{ .Values.nextcloud.systemConfig.defaultTimezone | quote }}
+            - name: SESSION_IDLE_TIMEOUT
+              value: {{ .Values.operator.session.idleTimeoutSeconds | quote }}
+            - name: SESSION_MAX_LIFESPAN
+              value: {{ .Values.operator.session.maxLifespanSeconds | quote }}
+            - name: SESSION_KEEPALIVE
+              value: {{ .Values.operator.session.keepalive | quote }}
             - name: RICH_WORKSPACES_ENABLED
               value: {{ ternary "1" "0" .Values.nextcloud.systemConfig.richWorkspacesEnabled | quote }}
             - name: MAINTENANCE_WINDOW_START

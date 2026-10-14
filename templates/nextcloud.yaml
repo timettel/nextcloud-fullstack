@@ -5,6 +5,21 @@
 {{- if and (eq .Values.deploymentProfile "prod") (ne .Values.nextcloud.persistence.accessMode "ReadWriteMany") }}
 {{- fail "production Nextcloud replicas on separate nodes require nextcloud.persistence.accessMode=ReadWriteMany" }}
 {{- end }}
+{{- $sessionIdle := int .Values.operator.session.idleTimeoutSeconds }}
+{{- $sessionMax := int .Values.operator.session.maxLifespanSeconds }}
+{{- $accessToken := int .Values.operator.session.accessTokenLifespanSeconds }}
+{{- if le $sessionIdle 0 }}
+{{- fail "operator.session.idleTimeoutSeconds must be greater than zero" }}
+{{- end }}
+{{- if ne (mod $sessionIdle 60) 0 }}
+{{- fail "operator.session.idleTimeoutSeconds must be divisible by 60" }}
+{{- end }}
+{{- if lt $sessionMax $sessionIdle }}
+{{- fail "operator.session.maxLifespanSeconds must be greater than or equal to idleTimeoutSeconds" }}
+{{- end }}
+{{- if or (le $accessToken 0) (gt $accessToken $sessionIdle) }}
+{{- fail "operator.session.accessTokenLifespanSeconds must be greater than zero and no longer than idleTimeoutSeconds" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -60,6 +75,8 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
+      annotations:
+        checksum/php-session-config: {{ dict "opcache" .Values.nextcloud.opcache "phpSession" .Values.nextcloud.phpSession "session" .Values.operator.session | toJson | sha256sum }}
       labels:
         app.kubernetes.io/component: nextcloud
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -100,6 +117,7 @@ spec:
               );
               $ini = "session.save_handler=redis\n"
                   . 'session.save_path="' . $savePath . "\"\n"
+                  . "session.gc_maxlifetime={{ .Values.operator.session.idleTimeoutSeconds }}\n"
                   . "redis.session.locking_enabled={{ ternary 1 0 .Values.nextcloud.phpSession.lockingEnabled }}\n"
                   . "redis.session.lock_retries={{ .Values.nextcloud.phpSession.lockRetries }}\n"
                   . "redis.session.lock_wait_time={{ .Values.nextcloud.phpSession.lockWaitTime }}\n";

@@ -46,6 +46,7 @@ configuration surface. It contains:
 - `publicIp`: address advertised by Coturn
 - `subdomains`: endpoint labels below the DNS zone
 - `admins`: the three deliberately managed recovery credentials
+- `session`: shared idle, maximum and OIDC token lifetimes for the web clients
 - `ldap.baseDn`: optional override; empty derives the DN from `domain`
 - `optionalSecrets`: internal secret overrides, normally left empty
 

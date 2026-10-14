@@ -30,11 +30,12 @@ data:
     ];
     $config['oauth_auth_type'] = 'XOAUTH2';
     $config['oauth_cache'] = 'db';
-    $config['oauth_cache_ttl'] = '8h';
+    $config['oauth_cache_ttl'] = {{ printf "%ds" (int .Values.operator.session.maxLifespanSeconds) | quote }};
     $config['oauth_login_redirect'] = true;
     $config['oauth_verify_peer'] = true;
     $config['username_domain'] = {{ (include "nextcloud-stack.domain" .) | quote }};
     $config['identities_level'] = 3;
+    $config['session_lifetime'] = {{ div (int .Values.operator.session.idleTimeoutSeconds) 60 }};
     $config['product_name'] = 'Webmail';
     {{- if .Values.mail.managesieve.enabled }}
     $config['managesieve_host'] = {{ printf "tls://%s:%v" (include "nextcloud-stack.host" (list . "mail")) .Values.mail.managesieve.port | quote }};
@@ -167,6 +168,8 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
+      annotations:
+        checksum/roundcube-config: {{ dict "domain" .Values.operator.domain "keycloakRealm" .Values.keycloak.realm "roundcube" .Values.roundcube "session" .Values.operator.session | toJson | sha256sum }}
       labels:
         app.kubernetes.io/component: roundcube
         app.kubernetes.io/instance: {{ .Release.Name }}

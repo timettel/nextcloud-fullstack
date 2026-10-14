@@ -1,0 +1,255 @@
+{{- if .Values.monitoring.enabled }}
+{{- if not .Values.keycloak.enabled }}
+{{- fail "monitoring.enabled requires keycloak.enabled for Grafana authentication" }}
+{{- end }}
+{{- if and .Values.monitoring.alertmanager.enabled (not .Values.mail.enabled) }}
+{{- fail "monitoring.alertmanager.enabled requires mail.enabled for alert delivery" }}
+{{- end }}
+{{- $fullname := include "nextcloud-stack.fullname" . -}}
+{{- $grafanaUrl := printf "https://%s" (include "nextcloud-stack.host" (list . "grafana")) -}}
+{{- $keycloakUrl := printf "https://%s" (include "nextcloud-stack.host" (list . "keycloak")) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-grafana-env
+  labels:
+    app.kubernetes.io/component: grafana
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+data:
+  GF_SERVER_ROOT_URL: {{ $grafanaUrl | quote }}
+  GF_AUTH_GENERIC_OAUTH_CLIENT_ID: {{ .Values.monitoring.integration.clientId | quote }}
+  GF_AUTH_GENERIC_OAUTH_AUTH_URL: {{ printf "%s/realms/%s/protocol/openid-connect/auth" $keycloakUrl .Values.keycloak.realm | quote }}
+  GF_AUTH_GENERIC_OAUTH_TOKEN_URL: {{ printf "%s/realms/%s/protocol/openid-connect/token" $keycloakUrl .Values.keycloak.realm | quote }}
+  GF_AUTH_GENERIC_OAUTH_API_URL: {{ printf "%s/realms/%s/protocol/openid-connect/userinfo" $keycloakUrl .Values.keycloak.realm | quote }}
+  GF_AUTH_GENERIC_OAUTH_ALLOWED_GROUPS: {{ .Values.monitoring.integration.allowedGroup | quote }}
+  GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: {{ printf "contains(groups[*], '%s') && 'GrafanaAdmin' || 'None'" .Values.monitoring.integration.allowedGroup | quote }}
+  GF_AUTH_SIGNOUT_REDIRECT_URL: {{ printf "%s/realms/%s/protocol/openid-connect/logout?client_id=%s&post_logout_redirect_uri=%s" $keycloakUrl .Values.keycloak.realm .Values.monitoring.integration.clientId ($grafanaUrl | urlquery) | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/component: grafana
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+data:
+  nextcloud-stack-overview.json: |-
+{{ .Files.Get "dashboards/nextcloud-stack-overview.json" | nindent 4 }}
+{{- if .Values.monitoring.blackboxExporter.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-blackbox
+  labels:
+    app.kubernetes.io/component: blackbox-exporter
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+data:
+  blackbox.yml: |
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 10s
+        http:
+          method: GET
+          follow_redirects: true
+          preferred_ip_protocol: ip4
+          fail_if_ssl: false
+          fail_if_not_ssl: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-blackbox
+  labels:
+    app.kubernetes.io/component: blackbox-exporter
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: blackbox-exporter
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: blackbox-exporter
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: blackbox-exporter
+          image: "{{ .Values.monitoring.blackboxExporter.image.repository }}:{{ .Values.monitoring.blackboxExporter.image.tag }}"
+          imagePullPolicy: {{ .Values.monitoring.blackboxExporter.image.pullPolicy }}
+          args:
+            - --config.file=/etc/blackbox/blackbox.yml
+          ports:
+            - name: http
+              containerPort: 9115
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+          resources:
+            {{- toYaml .Values.monitoring.blackboxExporter.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/blackbox
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-blackbox
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-blackbox
+  labels:
+    app.kubernetes.io/component: blackbox-exporter
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: blackbox-exporter
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 9115
+      targetPort: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: {{ $fullname }}-public-endpoints
+  labels:
+    app.kubernetes.io/component: blackbox-exporter
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  jobName: nextcloud-stack-public-endpoints
+  interval: 60s
+  module: http_2xx
+  prober:
+    url: {{ $fullname }}-blackbox:9115
+  targets:
+    staticConfig:
+      static:
+        - {{ printf "https://%s/status.php" (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+        - {{ printf "https://%s/healthcheck" (include "nextcloud-stack.host" (list . "office")) | quote }}
+        {{- if .Values.keycloak.enabled }}
+        - {{ printf "%s/realms/%s/.well-known/openid-configuration" $keycloakUrl .Values.keycloak.realm | quote }}
+        {{- end }}
+        {{- if .Values.roundcube.enabled }}
+        - {{ printf "https://%s/" (include "nextcloud-stack.host" (list . "webmail")) | quote }}
+        {{- end }}
+        {{- if .Values.phpmyadmin.enabled }}
+        - {{ printf "https://%s/" (include "nextcloud-stack.phpmyadminHost" .) | quote }}
+        {{- end }}
+        - {{ printf "%s/api/health" $grafanaUrl | quote }}
+{{- end }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullname }}-alerts
+  labels:
+    app.kubernetes.io/component: monitoring
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: nextcloud-stack.resources
+      rules:
+        - alert: NextcloudStackContainerOOMKilled
+          expr: |
+            (kube_pod_container_status_last_terminated_reason{namespace={{ .Release.Namespace | quote }},reason="OOMKilled"} == 1)
+            and on(namespace,pod,container)
+            (increase(kube_pod_container_status_restarts_total{namespace={{ .Release.Namespace | quote }}}[15m]) > 0)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Container {{ `{{ $labels.container }}` }} in {{ `{{ $labels.pod }}` }} was OOM-killed"
+        - alert: NextcloudStackContainerMemoryNearLimit
+          expr: |
+            sum by (namespace,pod,container) (container_memory_working_set_bytes{namespace={{ .Release.Namespace | quote }},container!="",image!=""})
+            /
+            sum by (namespace,pod,container) (kube_pod_container_resource_limits{namespace={{ .Release.Namespace | quote }},resource="memory",unit="byte"} > 0)
+            > 0.9
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Container {{ `{{ $labels.container }}` }} in {{ `{{ $labels.pod }}` }} uses over 90% of its memory limit"
+        - alert: NextcloudStackContainerCPUThrottled
+          expr: |
+            sum by (namespace,pod,container) (rate(container_cpu_cfs_throttled_periods_total{namespace={{ .Release.Namespace | quote }},container!=""}[5m]))
+            /
+            sum by (namespace,pod,container) (rate(container_cpu_cfs_periods_total{namespace={{ .Release.Namespace | quote }},container!=""}[5m]))
+            > 0.25
+          for: 20m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Container {{ `{{ $labels.container }}` }} in {{ `{{ $labels.pod }}` }} is heavily CPU-throttled"
+    {{- if .Values.monitoring.blackboxExporter.enabled }}
+    - name: nextcloud-stack.endpoints
+      rules:
+        - alert: NextcloudStackEndpointDown
+          expr: probe_success{job="nextcloud-stack-public-endpoints"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Public endpoint {{ `{{ $labels.instance }}` }} is unavailable"
+        - alert: NextcloudStackCertificateExpiring
+          expr: probe_ssl_earliest_cert_expiry{job="nextcloud-stack-public-endpoints"} - time() < 14 * 24 * 3600
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "TLS certificate for {{ `{{ $labels.instance }}` }} expires within 14 days"
+    {{- end }}
+{{- if and .Values.monitoring.alertmanager.enabled .Values.mail.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1beta1
+kind: AlertmanagerConfig
+metadata:
+  name: nextcloud-stack-alerts
+  labels:
+    app.kubernetes.io/component: alertmanager
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  route:
+    receiver: email
+    groupBy: [namespace, alertname]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    routes:
+      - receiver: discard
+        matchers:
+          - name: alertname
+            matchType: =~
+            value: Watchdog|InfoInhibitor
+  receivers:
+    - name: discard
+    - name: email
+      emailConfigs:
+        - to: {{ required "monitoring.integration.alertEmail is required when monitoring alerts are enabled" .Values.monitoring.integration.alertEmail | quote }}
+          from: {{ default (printf "nextcloud@%s" (include "nextcloud-stack.domain" .)) .Values.monitoring.integration.alertFrom | quote }}
+          smarthost: {{ printf "%s-mail:465" $fullname | quote }}
+          authUsername: {{ printf "%s@%s" .Values.mail.serviceAccount.username (include "nextcloud-stack.domain" .) | quote }}
+          authIdentity: {{ printf "%s@%s" .Values.mail.serviceAccount.username (include "nextcloud-stack.domain" .) | quote }}
+          authPassword:
+            name: {{ $fullname }}
+            key: mail-service-password
+          requireTLS: true
+          forceImplicitTLS: true
+          tlsConfig:
+            serverName: {{ include "nextcloud-stack.host" (list . "mail") | quote }}
+          sendResolved: true
+{{- end }}
+{{- end }}

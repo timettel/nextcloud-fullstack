@@ -173,6 +173,64 @@ spec:
                 fi
                 echo "Roundcube OpenID Connect client is ready"
               fi
+
+              if [ "$GRAFANA_ENABLED" = true ]; then
+                echo "Ensuring the Grafana OpenID Connect client exists..."
+                grafana_id=$("$KCADM" get clients -r "$KEYCLOAK_REALM" \
+                  -q clientId="$GRAFANA_CLIENT_ID" --fields id,clientId \
+                  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+
+                if [ -z "$grafana_id" ]; then
+                  "$KCADM" create clients -r "$KEYCLOAK_REALM" \
+                    -s clientId="$GRAFANA_CLIENT_ID" \
+                    -s name="Grafana Monitoring" \
+                    -s enabled=true \
+                    -s protocol=openid-connect \
+                    -s publicClient=false \
+                    -s secret="$GRAFANA_CLIENT_SECRET" \
+                    -s standardFlowEnabled=true \
+                    -s directAccessGrantsEnabled=false \
+                    -s serviceAccountsEnabled=false \
+                    -s rootUrl="$GRAFANA_URL" \
+                    -s baseUrl="$GRAFANA_URL" \
+                    -s "redirectUris=[\"$GRAFANA_URL/login/generic_oauth\"]" \
+                    -s "webOrigins=[\"$GRAFANA_URL\"]" \
+                    -s "attributes={\"post.logout.redirect.uris\":\"$GRAFANA_URL/*\"}" >/dev/null
+                  grafana_id=$("$KCADM" get clients -r "$KEYCLOAK_REALM" \
+                    -q clientId="$GRAFANA_CLIENT_ID" --fields id,clientId \
+                    | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+                else
+                  "$KCADM" update "clients/$grafana_id" -r "$KEYCLOAK_REALM" \
+                    -s name="Grafana Monitoring" \
+                    -s enabled=true \
+                    -s publicClient=false \
+                    -s secret="$GRAFANA_CLIENT_SECRET" \
+                    -s standardFlowEnabled=true \
+                    -s directAccessGrantsEnabled=false \
+                    -s serviceAccountsEnabled=false \
+                    -s rootUrl="$GRAFANA_URL" \
+                    -s baseUrl="$GRAFANA_URL" \
+                    -s "redirectUris=[\"$GRAFANA_URL/login/generic_oauth\"]" \
+                    -s "webOrigins=[\"$GRAFANA_URL\"]" \
+                    -s "attributes={\"post.logout.redirect.uris\":\"$GRAFANA_URL/*\"}" >/dev/null
+                fi
+                test -n "$grafana_id"
+
+                if ! "$KCADM" get "clients/$grafana_id/protocol-mappers/models" \
+                  -r "$KEYCLOAK_REALM" --fields name | grep -q '"groups"'; then
+                  "$KCADM" create "clients/$grafana_id/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
+                    -s name=groups \
+                    -s protocol=openid-connect \
+                    -s protocolMapper=oidc-group-membership-mapper \
+                    -s consentRequired=false \
+                    -s 'config."claim.name"="groups"' \
+                    -s 'config."full.path"="false"' \
+                    -s 'config."id.token.claim"="true"' \
+                    -s 'config."access.token.claim"="true"' \
+                    -s 'config."userinfo.token.claim"="true"' >/dev/null
+                fi
+                echo "Grafana OpenID Connect client is ready"
+              fi
           env:
             - name: KEYCLOAK_URL
               value: "http://{{ include "nextcloud-stack.fullname" . }}-keycloak:8080"
@@ -214,6 +272,19 @@ spec:
                   key: roundcube-oauth-client-secret
             - name: ROUNDCUBE_URL
               value: "https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}"
+            {{- end }}
+            - name: GRAFANA_ENABLED
+              value: {{ .Values.monitoring.enabled | quote }}
+            {{- if .Values.monitoring.enabled }}
+            - name: GRAFANA_CLIENT_ID
+              value: {{ .Values.monitoring.integration.clientId | quote }}
+            - name: GRAFANA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: grafana-oauth-client-secret
+            - name: GRAFANA_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "grafana")) }}"
             {{- end }}
           resources:
             {{- toYaml .Values.helperResources | nindent 12 }}

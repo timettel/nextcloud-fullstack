@@ -182,6 +182,27 @@ spec:
         namespaces:
           from: Same
     {{- end }}
+    {{- if .Values.monitoring.enabled }}
+    - name: grafana-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "grafana")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: grafana-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "grafana")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
     {{- if .Values.identityDirectory.enabled }}
     - name: lldap-http
       protocol: HTTP
@@ -350,6 +371,10 @@ spec:
     - name: {{ include "nextcloud-stack.fullname" . }}
       sectionName: phpmyadmin-http
     {{- end }}
+    {{- if .Values.monitoring.enabled }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: grafana-http
+    {{- end }}
     {{- if .Values.identityDirectory.enabled }}
     - name: {{ include "nextcloud-stack.fullname" . }}
       sectionName: lldap-http
@@ -374,6 +399,9 @@ spec:
     {{- end }}
     {{- if .Values.phpmyadmin.enabled }}
     - {{ include "nextcloud-stack.phpmyadminHost" . | quote }}
+    {{- end }}
+    {{- if .Values.monitoring.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "grafana")) | quote }}
     {{- end }}
     {{- if .Values.identityDirectory.enabled }}
     - {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
@@ -480,6 +508,29 @@ spec:
       {{- end }}
       backendRefs:
         - name: {{ include "nextcloud-stack.fullname" . }}-phpmyadmin
+          port: 80
+{{ end }}
+{{ if .Values.monitoring.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-grafana
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: grafana-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "grafana")) | quote }}
+  rules:
+    - {{- if .Values.nextcloud.hsts.enabled }}
+      filters:
+        {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        - name: {{ .Release.Name }}-monitoring-grafana
           port: 80
 {{ end }}
 {{ if .Values.identityDirectory.enabled }}

@@ -1,10 +1,15 @@
 apiVersion: v2
 name: nextcloud-stack
-description: Nextcloud stack with Galera, Elasticsearch, EuroOffice, Talk, AppAPI HaRP, Windmill and Gateway API
+description: Nextcloud stack with Galera, Elasticsearch, EuroOffice, Talk, Windmill, monitoring and Gateway API
 type: application
-version: 0.15.5
+version: 0.16.0
 appVersion: "35.0.1"
 dependencies:
+  - name: kube-prometheus-stack
+    alias: monitoring
+    version: 92.3.0
+    repository: oci://ghcr.io/prometheus-community/charts
+    condition: monitoring.enabled
   - name: windmill
     alias: workflowengine
     version: 4.0.280

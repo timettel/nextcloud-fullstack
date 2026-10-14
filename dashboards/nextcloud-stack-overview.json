@@ -1,0 +1,29 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {"type":"stat","title":"Ready pods","id":1,"gridPos":{"h":4,"w":4,"x":0,"y":0},"targets":[{"expr":"sum(kube_pod_status_ready{namespace=\"$namespace\",condition=\"true\"})","refId":"A"}],"fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}},"overrides":[]}},
+    {"type":"stat","title":"Not ready pods","id":2,"gridPos":{"h":4,"w":4,"x":4,"y":0},"targets":[{"expr":"sum(kube_pod_status_ready{namespace=\"$namespace\",condition=\"false\"})","refId":"A"}],"fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":1}]}},"overrides":[]}},
+    {"type":"stat","title":"Container restarts (24h)","id":3,"gridPos":{"h":4,"w":4,"x":8,"y":0},"targets":[{"expr":"sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[24h]))","refId":"A"}],"fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":1},{"color":"red","value":5}]}},"overrides":[]}},
+    {"type":"stat","title":"OOM kills (24h)","id":4,"gridPos":{"h":4,"w":4,"x":12,"y":0},"targets":[{"expr":"sum((kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\",reason=\"OOMKilled\"} == 1) and on(namespace,pod,container) (increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[24h]) > 0))","refId":"A"}],"fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":1}]}},"overrides":[]}},
+    {"type":"stat","title":"Endpoint availability","id":5,"gridPos":{"h":4,"w":4,"x":16,"y":0},"targets":[{"expr":"avg(probe_success{job=\"nextcloud-stack-public-endpoints\"})","refId":"A"}],"fieldConfig":{"defaults":{"unit":"percentunit","min":0,"max":1,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"yellow","value":0.99},{"color":"green","value":1}]}},"overrides":[]}},
+    {"type":"stat","title":"Shortest TLS lifetime","id":6,"gridPos":{"h":4,"w":4,"x":20,"y":0},"targets":[{"expr":"min(probe_ssl_earliest_cert_expiry{job=\"nextcloud-stack-public-endpoints\"} - time())","refId":"A"}],"fieldConfig":{"defaults":{"unit":"s","color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"yellow","value":1209600},{"color":"green","value":2592000}]}},"overrides":[]}},
+    {"type":"timeseries","title":"CPU usage by pod","id":7,"gridPos":{"h":8,"w":12,"x":0,"y":4},"targets":[{"expr":"sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\",image!=\"\"}[5m]))","legendFormat":"{{pod}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"cores"},"overrides":[]}},
+    {"type":"timeseries","title":"Memory working set by pod","id":8,"gridPos":{"h":8,"w":12,"x":12,"y":4},"targets":[{"expr":"sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\",container!=\"\",image!=\"\"})","legendFormat":"{{pod}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"bytes"},"overrides":[]}},
+    {"type":"timeseries","title":"Memory usage vs. limit","id":9,"gridPos":{"h":8,"w":12,"x":0,"y":12},"targets":[{"expr":"sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\",container!=\"\",image!=\"\"}) / sum by (pod) (kube_pod_container_resource_limits{namespace=\"$namespace\",resource=\"memory\",unit=\"byte\"} > 0)","legendFormat":"{{pod}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"percentunit","min":0,"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":0.75},{"color":"red","value":0.9}]}},"overrides":[]}},
+    {"type":"timeseries","title":"CPU throttling","id":10,"gridPos":{"h":8,"w":12,"x":12,"y":12},"targets":[{"expr":"sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=\"$namespace\",container!=\"\"}[5m])) / sum by (pod) (rate(container_cpu_cfs_periods_total{namespace=\"$namespace\",container!=\"\"}[5m]))","legendFormat":"{{pod}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"percentunit","min":0},"overrides":[]}},
+    {"type":"timeseries","title":"Public endpoint latency","id":11,"gridPos":{"h":8,"w":12,"x":0,"y":20},"targets":[{"expr":"probe_duration_seconds{job=\"nextcloud-stack-public-endpoints\"}","legendFormat":"{{instance}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"s"},"overrides":[]}},
+    {"type":"table","title":"Persistent volume claims","id":12,"gridPos":{"h":8,"w":12,"x":12,"y":20},"targets":[{"expr":"kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=\"$namespace\"}","format":"table","instant":true,"refId":"A"}],"transformations":[{"id":"organize","options":{"excludeByName":{"Time":true,"__name__":true,"container":true,"endpoint":true,"instance":true,"job":true,"namespace":true,"service":true},"renameByName":{"persistentvolumeclaim":"PVC","Value":"Requested"}}}],"fieldConfig":{"defaults":{"unit":"bytes"},"overrides":[]}}
+  ],
+  "refresh": "30s",
+  "schemaVersion": 42,
+  "tags": ["nextcloud", "kubernetes"],
+  "templating": {"list":[{"name":"namespace","type":"query","label":"Namespace","query":{"query":"label_values(kube_pod_info, namespace)","refId":"namespace"},"refresh":1}]},
+  "time": {"from":"now-6h","to":"now"},
+  "timezone": "browser",
+  "title": "Nextcloud Stack Overview",
+  "uid": "nextcloud-stack-overview",
+  "version": 1
+}

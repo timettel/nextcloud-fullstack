@@ -19,3 +19,22 @@ fulltextsearch:
   elasticsearch:
     scheduling:
       antiAffinity: preferred
+
+# k3s embeds these control-plane components and does not expose the standard
+# scrape endpoints expected by kube-prometheus-stack.
+monitoring:
+  defaultRules:
+    rules:
+      etcd: false
+      kubeControllerManager: false
+      kubeProxy: false
+      kubeSchedulerAlerting: false
+      kubeSchedulerRecording: false
+  kubeControllerManager:
+    enabled: false
+  kubeEtcd:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeProxy:
+    enabled: false

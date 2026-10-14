@@ -81,6 +81,7 @@ Create records for the configured subdomains or provide a wildcard record for
 - `ldap.<domain>`: LLDAP UI
 - `webmail.<domain>`: Roundcube
 - `db.<domain>`: phpMyAdmin
+- `grafana.<domain>`: Grafana monitoring
 - `windmill.<domain>`: Windmill
 - `talk.<domain>` and `recording.<domain>`: Talk backends
 - `turn.<domain>`: TURN UDP/TLS on port 443
@@ -89,6 +90,26 @@ Create records for the configured subdomains or provide a wildcard record for
 The mail service also requires the appropriate MX, SPF, DKIM and DMARC records.
 Expose the configured Talk relay range and the mail service ports according to
 the cluster's LoadBalancer implementation and firewall policy.
+
+## Monitoring
+
+`monitoring.enabled` installs Prometheus Operator, Prometheus, Alertmanager,
+Grafana, kube-state-metrics and node-exporter. Grafana authenticates directly
+against Keycloak; only members of `monitoring.integration.allowedGroup`
+(`nc-admin` by default) are admitted and receive the Grafana administrator
+role.
+
+The bundled overview dashboard covers pod readiness, restarts and OOM kills,
+CPU, memory, throttling, PVC requests, public endpoint latency and TLS
+certificate lifetime. The upstream Kubernetes dashboards and alert rules remain
+available alongside it. Prometheus retains 15 days in a 30 GiB PVC by default;
+Grafana and Alertmanager use separate 5 GiB and 2 GiB PVCs.
+
+HTTP/TLS probes are provided by the bundled blackbox exporter. Alertmanager
+sends firing and resolved notifications to `monitoring.integration.alertEmail`
+through the stack's mail service. Set `monitoring.enabled: false` to omit the
+complete monitoring subsystem, or disable only
+`monitoring.blackboxExporter.enabled` or `monitoring.alertmanager.enabled`.
 
 ## Deployment Profiles
 

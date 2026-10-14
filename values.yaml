@@ -499,7 +499,7 @@ monitoring:
         name: Keycloak
         auto_login: true
         allow_sign_up: true
-        scopes: openid profile email groups
+        scopes: openid profile email
         groups_attribute_path: groups
         role_attribute_path: "contains(groups[*], 'nc-admin') && 'GrafanaAdmin' || 'None'"
         role_attribute_strict: true

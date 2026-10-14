@@ -1,7 +1,11 @@
 {{- if .Values.fulltextsearch.enabled }}
 {{- $antiAffinity := required "fulltextsearch.elasticsearch.scheduling.antiAffinity must be set by values-test.yaml or values-prod.yaml" .Values.fulltextsearch.elasticsearch.scheduling.antiAffinity }}
+{{- $elasticsearchReplicas := int .Values.fulltextsearch.elasticsearch.replicas }}
 {{- if not (has $antiAffinity (list "preferred" "required")) }}
 {{- fail "fulltextsearch.elasticsearch.scheduling.antiAffinity must be preferred or required" }}
+{{- end }}
+{{- if lt $elasticsearchReplicas 3 }}
+{{- fail "fulltextsearch.elasticsearch.replicas must be at least 3 for a highly available master-eligible node set" }}
 {{- end }}
 apiVersion: elasticsearch.k8s.elastic.co/v1
 kind: Elasticsearch
@@ -18,7 +22,7 @@ spec:
         disabled: true
   nodeSets:
     - name: default
-      count: {{ .Values.fulltextsearch.elasticsearch.replicas }}
+      count: {{ $elasticsearchReplicas }}
       config:
         node.roles: [master, data, ingest]
         indices.fielddata.cache.size: 20%

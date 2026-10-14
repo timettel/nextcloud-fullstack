@@ -229,7 +229,9 @@ redis:
     topologyKey: kubernetes.io/hostname
   sentinel:
     masterSet: nextcloud
-    quorum: 2
+    # 0 derives a strict majority from redis.replicas: floor(n / 2) + 1.
+    # Set an explicit value only for a deliberately non-standard topology.
+    quorum: 0
     downAfterMilliseconds: 5000
     failoverTimeout: 60000
   proxy:

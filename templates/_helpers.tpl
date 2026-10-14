@@ -133,3 +133,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
       done
       echo "Nextcloud is ready"
 {{- end -}}
+
+{{/* Strict majority for quorum-based components: floor(n / 2) + 1. */}}
+{{- define "nextcloud-stack.majority" -}}
+{{- add (div (int .) 2) 1 -}}
+{{- end -}}

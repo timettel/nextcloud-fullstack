@@ -99,6 +99,32 @@ Exactly one profile must be selected:
 Production therefore requires at least three schedulable nodes for MariaDB,
 Redis and Elasticsearch, plus a StorageClass capable of RWX volumes.
 
+## Cluster Sizing
+
+MariaDB, Redis and the default Elasticsearch node set accept any replica count
+of at least three. Odd counts are recommended because an even count does not
+normally add failure tolerance over the preceding odd count. In the production
+profile, required pod anti-affinity places replicas of the same component on
+distinct Kubernetes nodes. Dynamic volume provisioning creates one PVC per
+stateful replica.
+
+Redis Sentinel derives its quorum automatically from `redis.replicas` using a
+strict majority (`floor(replicas / 2) + 1`). Keep
+`redis.sentinel.quorum: 0` for this behavior. An explicit value remains
+available for unusual topologies and is validated against the replica count.
+
+The following settings are intentionally not inferred from replica counts:
+
+- CPU and memory requests or limits
+- Galera buffer sizes and replication threads
+- Elasticsearch shard and index-replica counts
+- Redis proxy replicas
+- storage capacity per replica
+
+Those values depend on workload, failure domains and the storage backend. For
+larger Elasticsearch deployments, replace the combined master/data/ingest node
+set with dedicated node sets rather than increasing it indefinitely.
+
 ## Install and Upgrade
 
 The supported entry point is `deploy.sh`. It builds the content of

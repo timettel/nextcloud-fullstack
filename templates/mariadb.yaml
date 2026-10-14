@@ -1,6 +1,10 @@
 {{- if not (has .Values.deploymentProfile (list "test" "prod")) }}
 {{- fail "Select exactly one environment profile with -f values-test.yaml or -f values-prod.yaml" }}
 {{- end }}
+{{- $mariadbReplicas := int .Values.mariadb.replicas }}
+{{- if lt $mariadbReplicas 3 }}
+{{- fail "mariadb.replicas must be at least 3 for Galera quorum" }}
+{{- end }}
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: MariaDB
 metadata:
@@ -11,7 +15,7 @@ metadata:
 spec:
   image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
   imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
-  replicas: {{ .Values.mariadb.replicas }}
+  replicas: {{ $mariadbReplicas }}
   rootPasswordSecretKeyRef:
     name: {{ include "nextcloud-stack.fullname" . }}
     key: mariadb-root-password

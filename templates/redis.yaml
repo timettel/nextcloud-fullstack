@@ -1,9 +1,18 @@
 {{- $antiAffinity := required "redis.scheduling.antiAffinity must be set by values-test.yaml or values-prod.yaml" .Values.redis.scheduling.antiAffinity }}
+{{- $redisReplicas := int .Values.redis.replicas }}
+{{- $configuredQuorum := int .Values.redis.sentinel.quorum }}
+{{- $sentinelQuorum := $configuredQuorum }}
+{{- if eq $configuredQuorum 0 }}
+{{- $sentinelQuorum = include "nextcloud-stack.majority" $redisReplicas | int }}
+{{- end }}
 {{- if not (has $antiAffinity (list "preferred" "required")) }}
 {{- fail "redis.scheduling.antiAffinity must be preferred or required" }}
 {{- end }}
-{{- if lt (int .Values.redis.replicas) 3 }}
+{{- if lt $redisReplicas 3 }}
 {{- fail "redis.replicas must be at least 3 for Sentinel quorum and failover" }}
+{{- end }}
+{{- if or (lt $sentinelQuorum 1) (gt $sentinelQuorum $redisReplicas) }}
+{{- fail "redis.sentinel.quorum must be 0 for automatic majority or between 1 and redis.replicas" }}
 {{- end }}
 apiVersion: v1
 kind: Service
@@ -193,7 +202,7 @@ spec:
             - name: REDIS_MASTER_SET
               value: {{ .Values.redis.sentinel.masterSet | quote }}
             - name: REDIS_SENTINEL_QUORUM
-              value: {{ .Values.redis.sentinel.quorum | quote }}
+              value: {{ $sentinelQuorum | quote }}
             - name: REDIS_DOWN_AFTER
               value: {{ .Values.redis.sentinel.downAfterMilliseconds | quote }}
             - name: REDIS_FAILOVER_TIMEOUT

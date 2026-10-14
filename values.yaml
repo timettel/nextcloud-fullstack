@@ -477,6 +477,8 @@ monitoring:
           memory: 512Mi
   grafana:
     enabled: true
+    testFramework:
+      enabled: false
     admin:
       # Templated by the Grafana subchart and created by this chart.
       existingSecret: "{{ .Release.Name }}-nextcloud-stack"

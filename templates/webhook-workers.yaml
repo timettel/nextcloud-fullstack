@@ -1,0 +1,57 @@
+{{- if .Values.workflowengine.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-webhook-workers
+  labels:
+    app.kubernetes.io/component: webhook-workers
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workflowengine.webhookWorkers }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: webhook-workers
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: webhook-workers
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: worker
+          image: "{{ .Values.nextcloud.image.repository }}:{{ .Values.nextcloud.image.tag }}"
+          imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -u
+              cd /var/www/html
+              while true; do
+                if php occ status --output=json 2>/dev/null | grep -q '"installed":true' && \
+                   php occ app:getpath webhook_listeners >/dev/null 2>&1; then
+                  php occ background-job:worker -v -t 60 \
+                    'OCA\WebhookListeners\BackgroundJobs\WebhookCall' || sleep 5
+                else
+                  sleep 10
+                fi
+              done
+          volumeMounts:
+            - name: nextcloud
+              mountPath: /var/www/html
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: nextcloud
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+{{- end }}

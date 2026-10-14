@@ -1,0 +1,589 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: {{ .Values.gateway.className }}
+  listeners:
+    - name: nextcloud-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: nextcloud-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: eurooffice-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "office")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: eurooffice-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "office")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- if .Values.talk.enabled }}
+    - name: talk-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "talk")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: talk-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "talk")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: turn-tls
+      protocol: TLS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "turn")) | quote }}
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: TLSRoute
+    {{- if .Values.talk.recording.enabled }}
+    - name: recording-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "recording")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: recording-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "recording")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+    {{- end }}
+    {{- if and .Values.workflowengine.enabled .Values.workflowengine.publicAccess }}
+    - name: windmill-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "workflow")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: windmill-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "workflow")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+    {{- if .Values.keycloak.enabled }}
+    - name: keycloak-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "keycloak")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: keycloak-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "keycloak")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+    {{- if .Values.roundcube.enabled }}
+    - name: roundcube-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "webmail")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: roundcube-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "webmail")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+    {{- if .Values.phpmyadmin.enabled }}
+    - name: phpmyadmin-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ include "nextcloud-stack.phpmyadminHost" . | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: phpmyadmin-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ include "nextcloud-stack.phpmyadminHost" . | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+    {{- if .Values.identityDirectory.enabled }}
+    - name: lldap-http
+      protocol: HTTP
+      port: {{ default 8000 .Values.gateway.httpPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: lldap-https
+      protocol: HTTPS
+      port: {{ default 8443 .Values.gateway.httpsPort }}
+      hostname: {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "nextcloud-stack.fullname" . }}-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+---
+{{ if .Values.talk.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-turn
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: turn-tls
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "turn")) | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-turn-tls
+          port: 5349
+---
+{{ end }}
+{{ if .Values.notifyPush.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-notify-push
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: nextcloud-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /push
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+        {{- if .Values.nextcloud.hsts.enabled }}
+        {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
+        {{- end }}
+      backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-notify-push
+          port: {{ .Values.notifyPush.port }}
+---
+{{ end }}
+{{ if .Values.whiteboard.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-whiteboard
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: nextcloud-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.whiteboard.path | quote }}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+        {{- if .Values.nextcloud.hsts.enabled }}
+        {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
+        {{- end }}
+      backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-whiteboard
+          port: {{ .Values.whiteboard.port }}
+---
+{{ end }}
+{{ if .Values.appApi.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-exapps
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: nextcloud-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /exapps
+      {{- if .Values.nextcloud.hsts.enabled }}
+      filters:
+        {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-harp
+          port: {{ .Values.appApi.servicePort }}
+---
+{{ end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-redirect
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: nextcloud-http
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: eurooffice-http
+    {{- if .Values.talk.enabled }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: talk-http
+    {{- if .Values.talk.recording.enabled }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: recording-http
+    {{- end }}
+    {{- end }}
+    {{- if and .Values.workflowengine.enabled .Values.workflowengine.publicAccess }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: windmill-http
+    {{- end }}
+    {{- if .Values.keycloak.enabled }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: keycloak-http
+    {{- end }}
+    {{- if .Values.roundcube.enabled }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: roundcube-http
+    {{- end }}
+    {{- if .Values.phpmyadmin.enabled }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: phpmyadmin-http
+    {{- end }}
+    {{- if .Values.identityDirectory.enabled }}
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: lldap-http
+    {{- end }}
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+    - {{ (include "nextcloud-stack.host" (list . "office")) | quote }}
+    {{- if .Values.talk.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "talk")) | quote }}
+    {{- if .Values.talk.recording.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "recording")) | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if and .Values.workflowengine.enabled .Values.workflowengine.publicAccess }}
+    - {{ (include "nextcloud-stack.host" (list . "workflow")) | quote }}
+    {{- end }}
+    {{- if .Values.keycloak.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "keycloak")) | quote }}
+    {{- end }}
+    {{- if .Values.roundcube.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "webmail")) | quote }}
+    {{- end }}
+    {{- if .Values.phpmyadmin.enabled }}
+    - {{ include "nextcloud-stack.phpmyadminHost" . | quote }}
+    {{- end }}
+    {{- if .Values.identityDirectory.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
+    {{- end }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+{{ if and .Values.workflowengine.enabled .Values.workflowengine.publicAccess }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-windmill
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: windmill-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "workflow")) | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ws/
+      backendRefs:
+        - name: windmill-extra
+          port: 3000
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ws_debug/
+      backendRefs:
+        - name: windmill-extra
+          port: 3000
+    - backendRefs:
+        - name: windmill-app
+          port: 8000
+{{ end }}
+{{ if .Values.keycloak.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: keycloak-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "keycloak")) | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-keycloak
+          port: 8080
+{{ end }}
+{{ if .Values.roundcube.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-roundcube
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: roundcube-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "webmail")) | quote }}
+  rules:
+    - {{- if .Values.nextcloud.hsts.enabled }}
+      filters:
+        {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-roundcube
+          port: 80
+{{ end }}
+{{ if .Values.phpmyadmin.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-phpmyadmin
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: phpmyadmin-https
+  hostnames:
+    - {{ include "nextcloud-stack.phpmyadminHost" . | quote }}
+  rules:
+    - {{- if .Values.nextcloud.hsts.enabled }}
+      filters:
+        {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-phpmyadmin
+          port: 80
+{{ end }}
+{{ if .Values.identityDirectory.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-lldap
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: lldap-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-lldap
+          port: 17170
+{{ end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: nextcloud-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+  rules:
+    - {{- if .Values.nextcloud.hsts.enabled }}
+      filters:
+        {{- include "nextcloud-stack.hstsFilter" . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-eurooffice
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: eurooffice-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "office")) | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-eurooffice
+          port: 80
+{{ if .Values.talk.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-talk
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: talk-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "talk")) | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /standalone-signaling
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-talk
+          port: 8081
+{{ end }}
+{{ if and .Values.talk.enabled .Values.talk.recording.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-talk-recording
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "nextcloud-stack.fullname" . }}
+      sectionName: recording-https
+  hostnames:
+    - {{ (include "nextcloud-stack.host" (list . "recording")) | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ include "nextcloud-stack.fullname" . }}-talk-recording
+          port: 1234
+{{ end }}

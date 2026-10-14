@@ -1,0 +1,250 @@
+{{- if .Values.identityDirectory.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-lldap
+  labels:
+    app.kubernetes.io/component: identity-directory
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: identity-directory
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: ldap
+      port: 389
+      targetPort: ldap
+    - name: ldap-native
+      port: 3890
+      targetPort: ldap
+    - name: ldaps
+      port: 6360
+      targetPort: ldaps
+    - name: http
+      port: 17170
+      targetPort: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-lldap
+  labels:
+    app.kubernetes.io/component: identity-directory
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.identityDirectory.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-lldap
+  labels:
+    app.kubernetes.io/component: identity-directory
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: identity-directory
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: identity-directory
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: lldap
+          image: "{{ .Values.identityDirectory.image.repository }}:{{ .Values.identityDirectory.image.tag }}"
+          imagePullPolicy: {{ .Values.identityDirectory.image.pullPolicy }}
+          env:
+            - name: TZ
+              value: {{ .Values.nextcloud.systemConfig.defaultTimezone | quote }}
+            - name: LLDAP_LDAP_BASE_DN
+              value: {{ (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LLDAP_LDAP_USER_DN
+              value: {{ .Values.operator.admins.ldap.username | quote }}
+            - name: LLDAP_LDAP_USER_EMAIL
+              value: {{ .Values.operator.admins.ldap.email | quote }}
+            - name: LLDAP_LDAP_USER_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: lldap-admin-password
+            - name: LLDAP_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: lldap-jwt-secret
+            - name: LLDAP_KEY_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: lldap-key-seed
+            - name: LLDAP_LDAPS_OPTIONS__ENABLED
+              value: "true"
+            - name: LLDAP_LDAPS_OPTIONS__PORT
+              value: "6360"
+            - name: LLDAP_LDAPS_OPTIONS__CERT_FILE
+              value: /etc/lldap-tls/tls.crt
+            - name: LLDAP_LDAPS_OPTIONS__KEY_FILE
+              value: /etc/lldap-tls/tls.key
+          ports:
+            - name: ldap
+              containerPort: 3890
+            - name: http
+              containerPort: 17170
+            - name: ldaps
+              containerPort: 6360
+          startupProbe:
+            tcpSocket:
+              port: http
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: ldap
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.identityDirectory.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: ldaps-tls
+              mountPath: /etc/lldap-tls
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-lldap
+        - name: ldaps-tls
+          secret:
+            secretName: {{ include "nextcloud-stack.fullname" . }}-lldap-internal-tls
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-lldap-bootstrap
+  labels:
+    app.kubernetes.io/component: identity-directory-bootstrap
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+data:
+  10-nextcloud-users.json: |
+    {"name": {{ .Values.identityDirectory.nextcloudUsersGroup | quote }}}
+  20-nextcloud-admins.json: |
+    {"name": {{ .Values.identityDirectory.nextcloudAdminsGroup | quote }}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-lldap-bootstrap
+  labels:
+    app.kubernetes.io/component: identity-directory-bootstrap
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: identity-directory-bootstrap
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.identityDirectory.image.repository }}:{{ .Values.identityDirectory.image.tag }}"
+          imagePullPolicy: {{ .Values.identityDirectory.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              until wget -q -O /dev/null "$LLDAP_URL"; do sleep 3; done
+              mkdir -p "$USER_CONFIGS_DIR"
+              jq -n \
+                --arg id "$LDAP_BIND_USERNAME" \
+                --arg email "$LDAP_BIND_EMAIL" \
+                --arg displayName "$LDAP_BIND_DISPLAY_NAME" \
+                --arg password "$LDAP_BIND_PASSWORD" \
+                '{id: $id, email: $email, displayName: $displayName, password: $password, groups: ["lldap_password_manager"]}' \
+                > "$USER_CONFIGS_DIR/10-nextcloud-directory.json"
+              {{- if .Values.mail.enabled }}
+              jq -n \
+                --arg id "$MAIL_SERVICE_USERNAME" \
+                --arg email "$MAIL_SERVICE_EMAIL" \
+                --arg displayName "$MAIL_SERVICE_DISPLAY_NAME" \
+                --arg password "$MAIL_SERVICE_PASSWORD" \
+                --arg group "$MAIL_USERS_GROUP" \
+                '{id: $id, email: $email, displayName: $displayName, password: $password, groups: [$group]}' \
+                > "$USER_CONFIGS_DIR/30-nextcloud-mail-service.json"
+              {{- end }}
+              /app/bootstrap.sh
+          env:
+            - name: LLDAP_URL
+              value: "http://{{ include "nextcloud-stack.fullname" . }}-lldap:17170"
+            - name: LLDAP_ADMIN_USERNAME
+              value: {{ .Values.operator.admins.ldap.username | quote }}
+            - name: LLDAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: lldap-admin-password
+            - name: GROUP_CONFIGS_DIR
+              value: /bootstrap/group-configs
+            - name: USER_CONFIGS_DIR
+              value: /bootstrap/user-configs
+            - name: LDAP_BIND_USERNAME
+              value: {{ .Values.identityDirectory.bindAccount.username | quote }}
+            - name: LDAP_BIND_DISPLAY_NAME
+              value: {{ .Values.identityDirectory.bindAccount.displayName | quote }}
+            - name: LDAP_BIND_EMAIL
+              value: {{ .Values.identityDirectory.bindAccount.email | quote }}
+            - name: LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: ldap-bind-password
+            {{- if .Values.mail.enabled }}
+            - name: MAIL_SERVICE_USERNAME
+              value: {{ .Values.mail.serviceAccount.username | quote }}
+            - name: MAIL_SERVICE_EMAIL
+              value: {{ printf "%s@%s" .Values.mail.serviceAccount.username (include "nextcloud-stack.domain" .) | quote }}
+            - name: MAIL_SERVICE_DISPLAY_NAME
+              value: {{ .Values.mail.serviceAccount.displayName | quote }}
+            - name: MAIL_USERS_GROUP
+              value: {{ .Values.identityDirectory.nextcloudUsersGroup | quote }}
+            - name: MAIL_SERVICE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: mail-service-password
+            {{- end }}
+            - name: DO_CLEANUP
+              value: "false"
+          volumeMounts:
+            - name: groups
+              mountPath: /bootstrap/group-configs
+              readOnly: true
+            - name: users
+              mountPath: /bootstrap/user-configs
+      volumes:
+        - name: groups
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-lldap-bootstrap
+        - name: users
+          emptyDir: {}
+{{- end }}

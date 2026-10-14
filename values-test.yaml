@@ -1,0 +1,21 @@
+# Single-node/integration profile. Workloads prefer separate nodes but may be
+# co-located; Nextcloud uses RWO storage.
+deploymentProfile: test
+
+nextcloud:
+  persistence:
+    accessMode: ReadWriteOnce
+  scheduling:
+    antiAffinity: preferred
+
+redis:
+  scheduling:
+    antiAffinity: preferred
+
+mariadb:
+  scheduling: {}
+
+fulltextsearch:
+  elasticsearch:
+    scheduling:
+      antiAffinity: preferred

@@ -1,0 +1,14 @@
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Local operator configuration and rendered manifests
+values-local.yaml
+values-*.local.yaml
+secrets*.yaml
+rendered*.yaml
+
+# Local build output
+*.tar
+*.tgz.tmp

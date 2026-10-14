@@ -1,0 +1,59 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "nextcloud-stack.fullname" . }}-tls
+  issuerRef:
+    name: {{ include "nextcloud-stack.fullname" . }}-letsencrypt
+    kind: Issuer
+  dnsNames:
+    - {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+    - {{ (include "nextcloud-stack.host" (list . "office")) | quote }}
+    {{- if .Values.talk.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "talk")) | quote }}
+    - {{ (include "nextcloud-stack.host" (list . "turn")) | quote }}
+    {{- if .Values.talk.recording.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "recording")) | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if and .Values.workflowengine.enabled .Values.workflowengine.publicAccess }}
+    - {{ (include "nextcloud-stack.host" (list . "workflow")) | quote }}
+    {{- end }}
+    {{- if .Values.keycloak.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "keycloak")) | quote }}
+    {{- end }}
+    {{- if .Values.roundcube.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "webmail")) | quote }}
+    {{- end }}
+    {{- if .Values.phpmyadmin.enabled }}
+    - {{ include "nextcloud-stack.phpmyadminHost" . | quote }}
+    {{- end }}
+    {{- if .Values.identityDirectory.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
+    {{- end }}
+    {{- if .Values.mail.enabled }}
+    - {{ (include "nextcloud-stack.host" (list . "mail")) | quote }}
+    {{- end }}
+
+{{- if .Values.identityDirectory.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-lldap-internal
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "nextcloud-stack.fullname" . }}-lldap-internal-tls
+  issuerRef:
+    name: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+    kind: Issuer
+  dnsNames:
+    - {{ printf "%s-lldap" (include "nextcloud-stack.fullname" .) | quote }}
+    - {{ printf "%s-lldap.%s" (include "nextcloud-stack.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s-lldap.%s.svc" (include "nextcloud-stack.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s-lldap.%s.svc.cluster.local" (include "nextcloud-stack.fullname" .) .Release.Namespace | quote }}
+{{- end }}

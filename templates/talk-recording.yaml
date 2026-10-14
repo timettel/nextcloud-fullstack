@@ -1,0 +1,122 @@
+{{- if and .Values.talk.enabled .Values.talk.recording.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-talk-recording
+  labels:
+    app.kubernetes.io/component: talk-recording
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: talk-recording
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 1234
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-talk-recording
+  labels:
+    app.kubernetes.io/component: talk-recording
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: talk-recording
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: talk-recording
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/recording-secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | quote }}
+    spec:
+      securityContext:
+        runAsUser: 122
+        runAsGroup: 122
+        runAsNonRoot: true
+        fsGroup: 122
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: recording
+          image: "{{ .Values.talk.recording.image.repository }}:{{ .Values.talk.recording.image.tag }}"
+          imagePullPolicy: {{ .Values.talk.recording.image.pullPolicy }}
+          env:
+            - name: NC_DOMAIN
+              value: {{ (include "nextcloud-stack.host" (list . "nextcloud")) | quote }}
+            - name: NC_PROTOCOL
+              value: https
+            - name: HPB_DOMAIN
+              value: {{ (include "nextcloud-stack.host" (list . "talk")) | quote }}
+            - name: HPB_PROTOCOL
+              value: https
+            - name: HPB_PATH
+              value: /standalone-signaling/
+            - name: ALLOW_ALL
+              value: "false"
+            - name: SKIP_VERIFY
+              value: "false"
+            - name: AIO_LOG_LEVEL
+              value: {{ .Values.talk.recording.logLevel | quote }}
+            - name: TZ
+              value: Europe/Berlin
+            - name: RECORDING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: talk-recording-secret
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: talk-internal-secret
+          ports:
+            - name: http
+              containerPort: 1234
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: [/healthcheck.sh]
+            failureThreshold: 12
+            periodSeconds: 10
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command: [/healthcheck.sh]
+            initialDelaySeconds: 30
+            failureThreshold: 3
+            periodSeconds: 30
+            timeoutSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [NET_RAW]
+          volumeMounts:
+            - name: recordings
+              mountPath: /tmp
+            - name: conf
+              mountPath: /conf
+            - name: shared-memory
+              mountPath: /dev/shm
+          resources:
+            {{- toYaml .Values.talk.recording.resources | nindent 12 }}
+      volumes:
+        - name: recordings
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-talk-recording
+        - name: conf
+          emptyDir:
+            medium: Memory
+        - name: shared-memory
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.talk.recording.sharedMemory }}
+{{- end }}

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: nextcloud-stack
+description: Nextcloud stack with Galera, Elasticsearch, EuroOffice, Talk, AppAPI HaRP, Windmill and Gateway API
+type: application
+version: 0.14.0
+appVersion: "35.0.1"
+dependencies:
+  - name: windmill
+    alias: workflowengine
+    version: 4.0.280
+    repository: https://windmill-labs.github.io/windmill-helm-charts/
+    condition: workflowengine.enabled

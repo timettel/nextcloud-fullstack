@@ -1,0 +1,114 @@
+{{- if and .Values.phpmyadmin.enabled (eq .Values.phpmyadmin.auth.mode "keycloak") }}
+{{- $fullname := include "nextcloud-stack.fullname" . -}}
+{{- $host := include "nextcloud-stack.phpmyadminHost" . -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-phpmyadmin-keycloak-bootstrap
+  labels:
+    app.kubernetes.io/component: phpmyadmin-keycloak-bootstrap
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "6"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: phpmyadmin-keycloak-bootstrap
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: configure
+          image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.image.pullPolicy }}
+          command: [/bin/bash, -c]
+          args:
+            - |
+              set -euo pipefail
+              KCADM=/opt/keycloak/bin/kcadm.sh
+
+              until "$KCADM" config credentials \
+                --server "$KEYCLOAK_URL" --realm master \
+                --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null 2>&1; do
+                sleep 5
+              done
+
+              client_id=$("$KCADM" get clients -r "$KEYCLOAK_REALM" \
+                -q clientId="$PHPMYADMIN_CLIENT_ID" --fields id,clientId \
+                | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+
+              if [ -z "$client_id" ]; then
+                "$KCADM" create clients -r "$KEYCLOAK_REALM" \
+                  -s clientId="$PHPMYADMIN_CLIENT_ID" \
+                  -s name="phpMyAdmin" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s publicClient=false \
+                  -s secret="$PHPMYADMIN_CLIENT_SECRET" \
+                  -s standardFlowEnabled=true \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false \
+                  -s rootUrl="$PHPMYADMIN_URL" \
+                  -s baseUrl="$PHPMYADMIN_URL" \
+                  -s "redirectUris=[\"$PHPMYADMIN_URL/oauth2/callback\"]" \
+                  -s "webOrigins=[\"$PHPMYADMIN_URL\"]" \
+                  -s "attributes={\"post.logout.redirect.uris\":\"$PHPMYADMIN_URL/*\"}" >/dev/null
+                client_id=$("$KCADM" get clients -r "$KEYCLOAK_REALM" \
+                  -q clientId="$PHPMYADMIN_CLIENT_ID" --fields id,clientId \
+                  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+              else
+                "$KCADM" update "clients/$client_id" -r "$KEYCLOAK_REALM" \
+                  -s name="phpMyAdmin" \
+                  -s enabled=true \
+                  -s publicClient=false \
+                  -s secret="$PHPMYADMIN_CLIENT_SECRET" \
+                  -s standardFlowEnabled=true \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false \
+                  -s rootUrl="$PHPMYADMIN_URL" \
+                  -s baseUrl="$PHPMYADMIN_URL" \
+                  -s "redirectUris=[\"$PHPMYADMIN_URL/oauth2/callback\"]" \
+                  -s "webOrigins=[\"$PHPMYADMIN_URL\"]" \
+                  -s "attributes={\"post.logout.redirect.uris\":\"$PHPMYADMIN_URL/*\"}" >/dev/null
+              fi
+              test -n "$client_id"
+
+              mapper_id=$("$KCADM" get "clients/$client_id/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
+                -q name=groups --fields id,name \
+                | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+              if [ -z "$mapper_id" ]; then
+                "$KCADM" create "clients/$client_id/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
+                  -s name=groups \
+                  -s protocol=openid-connect \
+                  -s protocolMapper=oidc-group-membership-mapper \
+                  -s 'config={"claim.name":"groups","full.path":"false","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}' >/dev/null
+              fi
+              echo "phpMyAdmin Keycloak client and group claim are ready"
+          env:
+            - name: KEYCLOAK_URL
+              value: {{ printf "http://%s-keycloak:8080" $fullname | quote }}
+            - name: KEYCLOAK_REALM
+              value: {{ .Values.keycloak.realm | quote }}
+            - name: KEYCLOAK_ADMIN
+              value: {{ .Values.operator.admins.keycloak.username | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: keycloak-admin-password
+            - name: PHPMYADMIN_CLIENT_ID
+              value: {{ .Values.phpmyadmin.auth.clientId | quote }}
+            - name: PHPMYADMIN_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: phpmyadmin-oauth-client-secret
+            - name: PHPMYADMIN_URL
+              value: {{ printf "https://%s" $host | quote }}
+{{- end }}

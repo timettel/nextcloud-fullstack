@@ -1,0 +1,84 @@
+{{- if and .Values.keycloak.enabled .Values.keycloak.adminGroupSync.enabled (not .Values.identityDirectory.enabled) }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak-admin-sync
+  labels:
+    app.kubernetes.io/component: keycloak-admin-sync
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.keycloak.adminGroupSync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: keycloak-admin-sync
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 33
+            runAsGroup: 33
+            fsGroup: 33
+          containers:
+            - name: sync
+              image: "{{ .Values.nextcloud.image.repository }}:{{ .Values.nextcloud.image.tag }}"
+              imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+              command: [/bin/sh, -c]
+              args:
+                - |
+                  set -eu
+                  cd /var/www/html
+
+                  provider_json=$(php occ user_oidc:provider "$PROVIDER_IDENTIFIER" --output=json)
+                  provider_id=$(printf '%s' "$provider_json" | php -r '$data = json_decode(stream_get_contents(STDIN), true); if (!isset($data["id"])) { exit(1); } echo $data["id"];')
+                  source_gid=$(printf '%s_0_%s' "$provider_id" "$SOURCE_GROUP" | sha256sum | cut -d' ' -f1)
+
+                  if ! php occ group:info "$source_gid" --output=json >/dev/null 2>&1; then
+                    echo "OIDC group $SOURCE_GROUP has not been provisioned yet; nothing to synchronize"
+                    exit 0
+                  fi
+
+                  source_json=$(php occ group:list "$source_gid" --output=json)
+                  admin_json=$(php occ group:list admin --output=json)
+                  source_users=$(printf '%s' "$source_json" | php -r '$data = json_decode(stream_get_contents(STDIN), true); foreach (($data[array_key_first($data)] ?? []) as $uid) { echo $uid, "\n"; }')
+                  admin_users=$(printf '%s' "$admin_json" | php -r '$data = json_decode(stream_get_contents(STDIN), true); foreach (($data["admin"] ?? []) as $uid) { echo $uid, "\n"; }')
+
+                  printf '%s\n' "$source_users" | while IFS= read -r uid; do
+                    [ -n "$uid" ] || continue
+                    if ! printf '%s\n' "$admin_users" | grep -Fqx "$uid"; then
+                      echo "Granting Nextcloud administrator rights to $uid"
+                      php occ group:adduser admin "$uid"
+                    fi
+                  done
+
+                  printf '%s\n' "$admin_users" | while IFS= read -r uid; do
+                    [ -n "$uid" ] || continue
+                    if printf '%s\n' "$PRESERVED_ADMINS" | grep -Fqx "$uid"; then
+                      continue
+                    fi
+                    if ! printf '%s\n' "$source_users" | grep -Fqx "$uid"; then
+                      echo "Revoking Nextcloud administrator rights from $uid"
+                      php occ group:removeuser admin "$uid"
+                    fi
+                  done
+              env:
+                - name: PROVIDER_IDENTIFIER
+                  value: {{ .Values.keycloak.providerIdentifier | quote }}
+                - name: SOURCE_GROUP
+                  value: {{ .Values.keycloak.adminGroupSync.sourceGroup | quote }}
+                - name: PRESERVED_ADMINS
+                  value: {{ join "\n" .Values.keycloak.adminGroupSync.preservedAdmins | quote }}
+              volumeMounts:
+                - name: nextcloud
+                  mountPath: /var/www/html
+          volumes:
+            - name: nextcloud
+              persistentVolumeClaim:
+                claimName: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+{{- end }}

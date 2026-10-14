@@ -1,0 +1,359 @@
+{{- if and .Values.mail.enabled (not .Values.identityDirectory.enabled) }}
+{{- fail "mail.enabled requires identityDirectory.enabled because LLDAP is the mail account provisioner" }}
+{{- end }}
+{{- if .Values.mail.enabled }}
+{{- $fullname := include "nextcloud-stack.fullname" . -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-mail-data
+  labels:
+    app.kubernetes.io/component: mail
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.mail.storage.mail }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-mail-state
+  labels:
+    app.kubernetes.io/component: mail
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.mail.storage.state }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-mail-logs
+  labels:
+    app.kubernetes.io/component: mail
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.mail.storage.logs }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-mail-config
+  labels:
+    app.kubernetes.io/component: mail
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.mail.storage.config }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mail
+  labels:
+    app.kubernetes.io/component: mail
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.mail.service.type }}
+  externalTrafficPolicy: {{ .Values.mail.service.externalTrafficPolicy }}
+  selector:
+    app.kubernetes.io/component: mail
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: smtp
+      port: 25
+      targetPort: smtp
+      protocol: TCP
+    - name: submissions
+      port: 465
+      targetPort: submissions
+      protocol: TCP
+    - name: submission
+      port: 587
+      targetPort: submission
+      protocol: TCP
+    - name: imaps
+      port: 993
+      targetPort: imaps
+      protocol: TCP
+    {{- if .Values.mail.managesieve.enabled }}
+    - name: managesieve
+      port: {{ .Values.mail.managesieve.port }}
+      targetPort: managesieve
+      protocol: TCP
+    {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-mail-dovecot-master
+  labels:
+    app.kubernetes.io/component: mail
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+data:
+  dovecot.cf: |
+    auth_master_user_separator = *
+
+    passdb nextcloud-master {
+      master                  = yes
+      driver                  = passwd-file
+      passwd_file_path        = /etc/dovecot/nextcloud-masterdb
+      auth_username_format    = %{user | lower}
+      default_password_scheme = SHA512-CRYPT
+      result_success          = continue
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-mail
+  labels:
+    app.kubernetes.io/component: mail
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: mail
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: mail
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      hostname: mail
+      initContainers:
+        - name: generate-nextcloud-mail-masterdb
+          image: "{{ .Values.mail.image.repository }}:{{ .Values.mail.image.tag }}"
+          imagePullPolicy: {{ .Values.mail.image.pullPolicy }}
+          command: [/bin/bash, -c]
+          args:
+            - |
+              set -euo pipefail
+              umask 077
+              HASH="$(printf '%s' "$MASTER_PASSWORD" | openssl passwd -6 -stdin)"
+              printf '%s:%s\n' "$MASTER_USER" "$HASH" > /masterdb/nextcloud-masterdb
+              chown root:dovecot /masterdb/nextcloud-masterdb
+              chmod 0640 /masterdb/nextcloud-masterdb
+          env:
+            - name: MASTER_USER
+              value: {{ .Values.mail.nextcloud.masterUser | quote }}
+            - name: MASTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: nextcloud-mail-master-password
+          volumeMounts:
+            - name: dovecot-masterdb
+              mountPath: /masterdb
+        - name: wait-for-certificate-and-generate-dkim
+          image: "{{ .Values.mail.image.repository }}:{{ .Values.mail.image.tag }}"
+          imagePullPolicy: {{ .Values.mail.image.pullPolicy }}
+          command: [/bin/bash, -c]
+          args:
+            - |
+              set -euo pipefail
+              until openssl x509 -in /etc/dms-certs/tls.crt -noout -checkhost "$MAIL_HOST" >/dev/null 2>&1; do
+                echo "Waiting for a certificate containing $MAIL_HOST..."
+                sleep 5
+              done
+              if ! find /tmp/docker-mailserver/rspamd/dkim -type f -name '*.private' -print -quit 2>/dev/null | grep -q .; then
+                setup config dkim domain "$MAIL_DOMAIN"
+              fi
+          env:
+            - name: MAIL_HOST
+              value: {{ (include "nextcloud-stack.host" (list . "mail")) | quote }}
+            - name: MAIL_DOMAIN
+              value: {{ (include "nextcloud-stack.domain" .) | quote }}
+            - name: ENABLE_RSPAMD
+              value: {{ ternary "1" "0" .Values.mail.rspamd.enabled | quote }}
+            - name: ENABLE_AMAVIS
+              value: {{ ternary "0" "1" .Values.mail.rspamd.enabled | quote }}
+            - name: ENABLE_OPENDKIM
+              value: {{ ternary "0" "1" .Values.mail.rspamd.enabled | quote }}
+          volumeMounts:
+            - name: config
+              mountPath: /tmp/docker-mailserver
+            - name: tls
+              mountPath: /etc/dms-certs
+              readOnly: true
+      containers:
+        - name: mail
+          image: "{{ .Values.mail.image.repository }}:{{ .Values.mail.image.tag }}"
+          imagePullPolicy: {{ .Values.mail.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: true
+            readOnlyRootFilesystem: false
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            privileged: false
+            capabilities:
+              add: [CHOWN, FOWNER, MKNOD, SETGID, SETUID, DAC_OVERRIDE, NET_BIND_SERVICE, SYS_CHROOT, MAC_OVERRIDE, KILL]
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: OVERRIDE_HOSTNAME
+              value: {{ (include "nextcloud-stack.host" (list . "mail")) | quote }}
+            - name: TZ
+              value: {{ .Values.nextcloud.systemConfig.defaultTimezone | quote }}
+            - name: ACCOUNT_PROVISIONER
+              value: LDAP
+            - name: LDAP_SERVER_HOST
+              value: {{ printf "ldap://%s-lldap:3890" $fullname | quote }}
+            - name: LDAP_SEARCH_BASE
+              value: {{ printf "ou=people,%s" (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_BIND_DN
+              value: {{ printf "uid=%s,ou=people,%s" .Values.operator.admins.ldap.username (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_BIND_PW
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: lldap-admin-password
+            - name: LDAP_QUERY_FILTER_DOMAIN
+              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(mail=*@%%s))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_QUERY_FILTER_USER
+              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(mail=%%s))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_QUERY_FILTER_ALIAS
+              value: "(uid=__no_mail_alias__)"
+            - name: LDAP_QUERY_FILTER_GROUP
+              value: "(uid=__no_mail_group__)"
+            - name: LDAP_QUERY_FILTER_SENDERS
+              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(mail=%%s))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: SPOOF_PROTECTION
+              value: "1"
+            - name: DOVECOT_USER_FILTER
+              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(|(uid=%%{user | username})(mail=%%{user})))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: DOVECOT_PASS_FILTER
+              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(|(uid=%%{user | username})(mail=%%{user})))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: DOVECOT_USER_ATTRS
+              value: "=uid=5000,=gid=5000,=home=/var/mail/%{ldap:uid},=mail=maildir:~/Maildir"
+            - name: DOVECOT_PASS_ATTRS
+              value: "uid=user,userPassword=password"
+            - name: DOVECOT_AUTH_BIND
+              value: "yes"
+            - name: SSL_TYPE
+              value: manual
+            - name: SSL_CERT_PATH
+              value: /etc/dms-certs/tls.crt
+            - name: SSL_KEY_PATH
+              value: /etc/dms-certs/tls.key
+            - name: TLS_LEVEL
+              value: modern
+            - name: ENABLE_RSPAMD
+              value: {{ ternary "1" "0" .Values.mail.rspamd.enabled | quote }}
+            - name: ENABLE_AMAVIS
+              value: {{ ternary "0" "1" .Values.mail.rspamd.enabled | quote }}
+            - name: ENABLE_OPENDKIM
+              value: {{ ternary "0" "1" .Values.mail.rspamd.enabled | quote }}
+            - name: ENABLE_OPENDMARC
+              value: {{ ternary "0" "1" .Values.mail.rspamd.enabled | quote }}
+            - name: ENABLE_POLICYD_SPF
+              value: {{ ternary "0" "1" .Values.mail.rspamd.enabled | quote }}
+            - name: ENABLE_CLAMAV
+              value: "0"
+            - name: ENABLE_FAIL2BAN
+              value: "0"
+            - name: ENABLE_POSTGREY
+              value: "0"
+            - name: ENABLE_MANAGESIEVE
+              value: {{ ternary "1" "0" .Values.mail.managesieve.enabled | quote }}
+            - name: PERMIT_DOCKER
+              value: none
+            - name: POSTMASTER_ADDRESS
+              value: {{ printf "postmaster@%s" (include "nextcloud-stack.domain" .) | quote }}
+            - name: POSTFIX_MESSAGE_SIZE_LIMIT
+              value: {{ .Values.mail.messageSizeLimitBytes | quote }}
+            - name: POSTFIX_MAILBOX_SIZE_LIMIT
+              value: "0"
+            - name: ENABLE_QUOTAS
+              value: "0"
+            {{- if .Values.roundcube.enabled }}
+            - name: ENABLE_OAUTH2
+              value: "1"
+            - name: OAUTH2_INTROSPECTION_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "keycloak")) }}/realms/{{ .Values.keycloak.realm }}/protocol/openid-connect/userinfo"
+            {{- end }}
+          ports:
+            - name: smtp
+              containerPort: 25
+            - name: submissions
+              containerPort: 465
+            - name: submission
+              containerPort: 587
+            - name: imaps
+              containerPort: 993
+            {{- if .Values.mail.managesieve.enabled }}
+            - name: managesieve
+              containerPort: {{ .Values.mail.managesieve.port }}
+            {{- end }}
+          startupProbe:
+            tcpSocket:
+              port: smtp
+            failureThreshold: 120
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: imaps
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: smtp
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.mail.resources | nindent 12 }}
+          volumeMounts:
+            - name: mail-data
+              mountPath: /var/mail
+            - name: mail-state
+              mountPath: /var/mail-state
+            - name: mail-logs
+              mountPath: /var/log/mail
+            - name: config
+              mountPath: /tmp/docker-mailserver
+            - name: dovecot-master-config
+              mountPath: /tmp/docker-mailserver/dovecot.cf
+              subPath: dovecot.cf
+              readOnly: true
+            - name: dovecot-masterdb
+              mountPath: /etc/dovecot/nextcloud-masterdb
+              subPath: nextcloud-masterdb
+              readOnly: true
+            - name: tls
+              mountPath: /etc/dms-certs
+              readOnly: true
+      volumes:
+        - name: mail-data
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-mail-data
+        - name: mail-state
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-mail-state
+        - name: mail-logs
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-mail-logs
+        - name: config
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-mail-config
+        - name: dovecot-master-config
+          configMap:
+            name: {{ $fullname }}-mail-dovecot-master
+        - name: dovecot-masterdb
+          emptyDir: {}
+        - name: tls
+          secret:
+            secretName: {{ $fullname }}-tls
+{{- end }}

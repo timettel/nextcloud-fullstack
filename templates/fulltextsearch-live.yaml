@@ -1,0 +1,67 @@
+{{- if and .Values.fulltextsearch.enabled .Values.fulltextsearch.live.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-fulltextsearch-live
+  labels:
+    app.kubernetes.io/component: fulltextsearch-live
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: fulltextsearch-live
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: fulltextsearch-live
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: fulltextsearch-live
+          image: "{{ .Values.nextcloud.image.repository }}:{{ .Values.nextcloud.image.tag }}"
+          imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              cd /var/www/html
+              echo "Waiting for the initial full-text index..."
+              while [ ! -f data/fts-index.done ]; do
+                sleep 10
+              done
+              echo "Waiting for Nextcloud and clearing a stale index lock..."
+              until php occ status --output=json >/dev/null 2>&1; do
+                sleep 10
+              done
+              php occ fulltextsearch:stop || true
+              sleep 3
+              while true; do
+                php occ fulltextsearch:live --no-readline --quiet --no-interaction || true
+                sleep 10
+              done
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - cd /var/www/html && php occ fulltextsearch:stop || true
+          volumeMounts:
+            - name: nextcloud
+              mountPath: /var/www/html
+          resources:
+            {{- toYaml .Values.fulltextsearch.live.resources | nindent 12 }}
+      volumes:
+        - name: nextcloud
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+{{- end }}

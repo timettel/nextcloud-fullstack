@@ -1,0 +1,259 @@
+{{- if and .Values.roundcube.enabled (not .Values.mail.enabled) }}
+{{- fail "roundcube.enabled requires mail.enabled" }}
+{{- end }}
+{{- if and .Values.roundcube.enabled (not .Values.keycloak.enabled) }}
+{{- fail "roundcube.enabled requires keycloak.enabled" }}
+{{- end }}
+{{- if .Values.roundcube.enabled }}
+{{- $fullname := include "nextcloud-stack.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-roundcube
+  labels:
+    app.kubernetes.io/component: roundcube
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+data:
+  oauth.inc.php: |
+    <?php
+    $config['use_https'] = true;
+    $config['oauth_provider'] = 'generic';
+    $config['oauth_provider_name'] = 'Keycloak';
+    $config['oauth_client_id'] = {{ .Values.roundcube.clientId | quote }};
+    $config['oauth_config_uri'] = {{ printf "https://%s/realms/%s/.well-known/openid-configuration" (include "nextcloud-stack.host" (list . "keycloak")) .Values.keycloak.realm | quote }};
+    $config['oauth_scope'] = 'openid email profile';
+    $config['oauth_identity_fields'] = ['email'];
+    $config['oauth_user_create_map'] = [
+      'user_name' => ['name', 'preferred_username'],
+      'user_email' => ['email'],
+      'language' => ['locale'],
+    ];
+    $config['oauth_auth_type'] = 'XOAUTH2';
+    $config['oauth_cache'] = 'db';
+    $config['oauth_cache_ttl'] = '8h';
+    $config['oauth_login_redirect'] = true;
+    $config['oauth_verify_peer'] = true;
+    $config['username_domain'] = {{ (include "nextcloud-stack.domain" .) | quote }};
+    $config['identities_level'] = 3;
+    $config['product_name'] = 'Webmail';
+    {{- if .Values.mail.managesieve.enabled }}
+    $config['managesieve_host'] = {{ printf "tls://%s:%v" (include "nextcloud-stack.host" (list . "mail")) .Values.mail.managesieve.port | quote }};
+    $config['managesieve_auth_type'] = 'XOAUTH2';
+    $config['managesieve_conn_options'] = [
+      'ssl' => [
+        'verify_peer' => true,
+        'verify_peer_name' => true,
+      ],
+    ];
+    {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-roundcube-postgresql
+  labels:
+    app.kubernetes.io/component: roundcube-postgresql
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: roundcube-postgresql
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-roundcube-postgresql
+  labels:
+    app.kubernetes.io/component: roundcube-postgresql
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-roundcube-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: roundcube-postgresql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: roundcube-postgresql
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgresql
+          image: "{{ .Values.roundcube.database.image.repository }}:{{ .Values.roundcube.database.image.tag }}"
+          imagePullPolicy: {{ .Values.roundcube.database.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: roundcube
+            - name: POSTGRES_USER
+              value: roundcube
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: roundcube-database-password
+          startupProbe:
+            exec:
+              command: [pg_isready, -U, roundcube, -d, roundcube]
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, roundcube, -d, roundcube]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, roundcube, -d, roundcube]
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.roundcube.database.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/component: roundcube-postgresql
+          {{- include "nextcloud-stack.labels" . | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.roundcube.database.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-roundcube
+  labels:
+    app.kubernetes.io/component: roundcube
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: roundcube
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-roundcube
+  labels:
+    app.kubernetes.io/component: roundcube
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: roundcube
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: roundcube
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      initContainers:
+        - name: wait-for-postgresql
+          image: "{{ .Values.roundcube.database.image.repository }}:{{ .Values.roundcube.database.image.tag }}"
+          imagePullPolicy: {{ .Values.roundcube.database.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - until pg_isready -h {{ $fullname }}-roundcube-postgresql -U roundcube -d roundcube; do sleep 5; done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: roundcube-database-password
+      containers:
+        - name: roundcube
+          image: "{{ .Values.roundcube.image.repository }}:{{ .Values.roundcube.image.tag }}"
+          imagePullPolicy: {{ .Values.roundcube.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: ROUNDCUBEMAIL_DB_TYPE
+              value: pgsql
+            - name: ROUNDCUBEMAIL_DB_HOST
+              value: {{ $fullname }}-roundcube-postgresql
+            - name: ROUNDCUBEMAIL_DB_PORT
+              value: "5432"
+            - name: ROUNDCUBEMAIL_DB_NAME
+              value: roundcube
+            - name: ROUNDCUBEMAIL_DB_USER
+              value: roundcube
+            - name: ROUNDCUBEMAIL_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: roundcube-database-password
+            - name: ROUNDCUBEMAIL_DES_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: roundcube-des-key
+            - name: ROUNDCUBEMAIL_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: roundcube-oauth-client-secret
+            - name: ROUNDCUBEMAIL_DEFAULT_HOST
+              value: "ssl://{{ (include "nextcloud-stack.host" (list . "mail")) }}"
+            - name: ROUNDCUBEMAIL_DEFAULT_PORT
+              value: "993"
+            - name: ROUNDCUBEMAIL_SMTP_SERVER
+              value: "tls://{{ (include "nextcloud-stack.host" (list . "mail")) }}"
+            - name: ROUNDCUBEMAIL_SMTP_PORT
+              value: "587"
+            - name: ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE
+              value: {{ .Values.nextcloud.phpUploadLimit | quote }}
+            - name: ROUNDCUBEMAIL_SKIN
+              value: elastic
+            - name: ROUNDCUBEMAIL_PLUGINS
+              value: {{ ternary "archive,zipdownload,managesieve" "archive,zipdownload" .Values.mail.managesieve.enabled | quote }}
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            failureThreshold: 120
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.roundcube.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /var/roundcube/config/oauth.inc.php
+              subPath: oauth.inc.php
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-roundcube
+{{- end }}

@@ -1,0 +1,218 @@
+{{- if and .Values.keycloak.enabled .Values.identityDirectory.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak-ldap-bootstrap
+  labels:
+    app.kubernetes.io/component: keycloak-ldap-bootstrap
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: keycloak-ldap-bootstrap
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: configure
+          image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.image.pullPolicy }}
+          command: [/bin/bash, -c]
+          args:
+            - |
+              set -euo pipefail
+              KCADM=/opt/keycloak/bin/kcadm.sh
+
+              echo "Waiting for Keycloak..."
+              until "$KCADM" config credentials \
+                --server "$KEYCLOAK_URL" --realm master \
+                --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null 2>&1; do
+                sleep 5
+              done
+
+              realm_id=$("$KCADM" get "realms/$KEYCLOAK_REALM" --fields id \
+                | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+              test -n "$realm_id"
+
+              provider_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
+                -q name=lldap --fields id,name \
+                | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+
+              if [ -z "$provider_id" ]; then
+                echo "Creating the LLDAP user federation provider..."
+                "$KCADM" create components -r "$KEYCLOAK_REALM" \
+                  -s name=lldap \
+                  -s providerId=ldap \
+                  -s providerType=org.keycloak.storage.UserStorageProvider \
+                  -s parentId="$realm_id" \
+                  -s 'config.vendor=["other"]' \
+                  -s 'config.editMode=["READ_ONLY"]' \
+                  -s 'config.enabled=["true"]' \
+                  -s 'config.priority=["0"]' \
+                  -s 'config.importEnabled=["true"]' \
+                  -s 'config.syncRegistrations=["false"]' \
+                  -s 'config.usernameLDAPAttribute=["uid"]' \
+                  -s 'config.rdnLDAPAttribute=["uid"]' \
+                  -s 'config.uuidLDAPAttribute=["uid"]' \
+                  -s 'config.userObjectClasses=["person"]' \
+                  -s 'config.searchScope=["1"]' \
+                  -s 'config.pagination=["false"]' \
+                  -s 'config.connectionPooling=["true"]' \
+                  -s 'config.authType=["simple"]' \
+                  -s "config.connectionUrl=[\"$LDAP_URL\"]" \
+                  -s "config.usersDn=[\"$LDAP_USERS_DN\"]" \
+                  -s "config.bindDn=[\"$LDAP_BIND_DN\"]" \
+                  -s "config.bindCredential=[\"$LDAP_BIND_PASSWORD\"]" \
+                  -s 'config.batchSizeForSync=["1000"]' \
+                  -s 'config.fullSyncPeriod=["3600"]' \
+                  -s 'config.changedSyncPeriod=["300"]' \
+                  -s 'config.trustEmail=["true"]'
+
+                provider_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
+                  -q name=lldap --fields id,name \
+                  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+              fi
+              test -n "$provider_id"
+
+              # Keep the complete sync frequent and disable Keycloak's
+              # timestamp-based incremental sync, which LLDAP does not support.
+              "$KCADM" update "components/$provider_id" -r "$KEYCLOAK_REALM" \
+                -s "config.fullSyncPeriod=[\"$LDAP_FULL_SYNC_PERIOD\"]" \
+                -s "config.changedSyncPeriod=[\"$LDAP_CHANGED_SYNC_PERIOD\"]" >/dev/null
+
+              # Keycloak's generic LDAP defaults map cn to firstName. LLDAP's
+              # cn is the complete display name, so use its dedicated givenName
+              # and sn attributes to avoid names such as "Tim Ettel Ettel".
+              first_name_mapper_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
+                -q parent="$provider_id" -q name="first name" --fields id,name \
+                | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+              last_name_mapper_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
+                -q parent="$provider_id" -q name="last name" --fields id,name \
+                | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+              test -n "$first_name_mapper_id"
+              test -n "$last_name_mapper_id"
+
+              "$KCADM" update "components/$first_name_mapper_id" -r "$KEYCLOAK_REALM" \
+                -s 'config."ldap.attribute"=["givenName"]' \
+                -s 'config."user.model.attribute"=["firstName"]' >/dev/null
+              "$KCADM" update "components/$last_name_mapper_id" -r "$KEYCLOAK_REALM" \
+                -s 'config."ldap.attribute"=["sn"]' \
+                -s 'config."user.model.attribute"=["lastName"]' >/dev/null
+
+              mapper_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
+                -q parent="$provider_id" -q name=groups --fields id,name \
+                | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+              if [ -z "$mapper_id" ]; then
+                echo "Creating the LLDAP group mapper..."
+                "$KCADM" create components -r "$KEYCLOAK_REALM" \
+                  -s name=groups \
+                  -s providerId=group-ldap-mapper \
+                  -s providerType=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
+                  -s parentId="$provider_id" \
+                  -s "config.\"groups.dn\"=[\"$LDAP_GROUPS_DN\"]" \
+                  -s 'config."group.name.ldap.attribute"=["cn"]' \
+                  -s 'config."group.object.classes"=["groupOfUniqueNames"]' \
+                  -s 'config."membership.ldap.attribute"=["uniqueMember"]' \
+                  -s 'config."membership.attribute.type"=["DN"]' \
+                  -s 'config."membership.user.ldap.attribute"=["uid"]' \
+                  -s 'config.mode=["READ_ONLY"]' \
+                  -s 'config."user.roles.retrieve.strategy"=["LOAD_GROUPS_BY_MEMBER_ATTRIBUTE"]' \
+                  -s 'config."preserve.group.inheritance"=["true"]' \
+                  -s 'config."drop.non.existing.groups.during.sync"=["false"]'
+              fi
+
+              echo "Synchronizing LDAP users and groups into Keycloak..."
+              "$KCADM" create "user-storage/$provider_id/sync?action=triggerFullSync" \
+                -r "$KEYCLOAK_REALM" >/dev/null
+              echo "Keycloak LLDAP federation configured"
+
+              if [ "$ROUNDCUBE_ENABLED" = true ]; then
+                echo "Ensuring the Roundcube OpenID Connect client exists..."
+                roundcube_id=$("$KCADM" get clients -r "$KEYCLOAK_REALM" \
+                  -q clientId="$ROUNDCUBE_CLIENT_ID" --fields id,clientId \
+                  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+
+                if [ -z "$roundcube_id" ]; then
+                  "$KCADM" create clients -r "$KEYCLOAK_REALM" \
+                    -s clientId="$ROUNDCUBE_CLIENT_ID" \
+                    -s name="Roundcube Webmail" \
+                    -s enabled=true \
+                    -s protocol=openid-connect \
+                    -s publicClient=false \
+                    -s secret="$ROUNDCUBE_CLIENT_SECRET" \
+                    -s standardFlowEnabled=true \
+                    -s directAccessGrantsEnabled=false \
+                    -s serviceAccountsEnabled=false \
+                    -s rootUrl="$ROUNDCUBE_URL" \
+                    -s baseUrl="$ROUNDCUBE_URL" \
+                    -s "redirectUris=[\"$ROUNDCUBE_URL/index.php/login/oauth\"]" \
+                    -s "webOrigins=[\"$ROUNDCUBE_URL\"]" \
+                    -s "attributes={\"post.logout.redirect.uris\":\"$ROUNDCUBE_URL/*\"}" >/dev/null
+                else
+                  "$KCADM" update "clients/$roundcube_id" -r "$KEYCLOAK_REALM" \
+                    -s name="Roundcube Webmail" \
+                    -s enabled=true \
+                    -s publicClient=false \
+                    -s secret="$ROUNDCUBE_CLIENT_SECRET" \
+                    -s standardFlowEnabled=true \
+                    -s directAccessGrantsEnabled=false \
+                    -s serviceAccountsEnabled=false \
+                    -s rootUrl="$ROUNDCUBE_URL" \
+                    -s baseUrl="$ROUNDCUBE_URL" \
+                    -s "redirectUris=[\"$ROUNDCUBE_URL/index.php/login/oauth\"]" \
+                    -s "webOrigins=[\"$ROUNDCUBE_URL\"]" \
+                    -s "attributes={\"post.logout.redirect.uris\":\"$ROUNDCUBE_URL/*\"}" >/dev/null
+                fi
+                echo "Roundcube OpenID Connect client is ready"
+              fi
+          env:
+            - name: KEYCLOAK_URL
+              value: "http://{{ include "nextcloud-stack.fullname" . }}-keycloak:8080"
+            - name: KEYCLOAK_REALM
+              value: {{ .Values.keycloak.realm | quote }}
+            - name: KEYCLOAK_ADMIN
+              value: {{ .Values.operator.admins.keycloak.username | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: keycloak-admin-password
+            - name: LDAP_URL
+              value: "ldap://{{ include "nextcloud-stack.fullname" . }}-lldap:389"
+            - name: LDAP_USERS_DN
+              value: "ou=people,{{ (include "nextcloud-stack.ldapBaseDn" .) }}"
+            - name: LDAP_GROUPS_DN
+              value: "ou=groups,{{ (include "nextcloud-stack.ldapBaseDn" .) }}"
+            - name: LDAP_BIND_DN
+              value: "uid={{ .Values.operator.admins.ldap.username }},ou=people,{{ (include "nextcloud-stack.ldapBaseDn" .) }}"
+            - name: LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: lldap-admin-password
+            - name: LDAP_FULL_SYNC_PERIOD
+              value: {{ .Values.keycloak.ldapSync.fullPeriodSeconds | quote }}
+            - name: LDAP_CHANGED_SYNC_PERIOD
+              value: {{ .Values.keycloak.ldapSync.changedPeriodSeconds | quote }}
+            - name: ROUNDCUBE_ENABLED
+              value: {{ .Values.roundcube.enabled | quote }}
+            {{- if .Values.roundcube.enabled }}
+            - name: ROUNDCUBE_CLIENT_ID
+              value: {{ .Values.roundcube.clientId | quote }}
+            - name: ROUNDCUBE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: roundcube-oauth-client-secret
+            - name: ROUNDCUBE_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}"
+            {{- end }}
+{{- end }}

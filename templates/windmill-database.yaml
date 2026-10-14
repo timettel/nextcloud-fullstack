@@ -1,0 +1,99 @@
+{{- if .Values.workflowengine.enabled }}
+{{- $secretName := "windmill-database" -}}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPassword := "" -}}
+{{- if $existingSecret -}}
+{{- if hasKey $existingSecret.data "password" -}}
+{{- $existingPassword = (index $existingSecret.data "password" | b64dec) -}}
+{{- else if hasKey $existingSecret.data "url" -}}
+{{- $existingUrl := index $existingSecret.data "url" | b64dec -}}
+{{- $existingPassword = regexReplaceAll "^postgres://[^:]+:([^@]+)@.*$" $existingUrl "$1" -}}
+{{- end -}}
+{{- end -}}
+{{- $password := default (default (randAlphaNum 48) $existingPassword) .Values.operator.optionalSecrets.windmillDatabasePassword -}}
+{{- $user := .Values.workflowengine.postgresql.auth.postgresUser -}}
+{{- $database := .Values.workflowengine.postgresql.auth.database -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    app.kubernetes.io/component: windmill-postgresql
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ $password | quote }}
+  url: {{ printf "postgres://%s:%s@windmill-postgresql/%s?sslmode=disable" $user $password $database | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: windmill-postgresql
+spec:
+  selector:
+    app: windmill-postgresql-demo-app
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: windmill-postgresql
+spec:
+  serviceName: windmill-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: windmill-postgresql-demo-app
+  template:
+    metadata:
+      labels:
+        app: windmill-postgresql-demo-app
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ $user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: password
+            - name: POSTGRES_DB
+              value: {{ $database | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, {{ $user | quote }}, -d, {{ $database | quote }}]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, {{ $user | quote }}, -d, {{ $database | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.workflowengine.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ .Values.workflowengine.postgresql.persistence.accessMode }}
+        {{- if .Values.workflowengine.postgresql.persistence.storageClass }}
+        storageClassName: {{ .Values.workflowengine.postgresql.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.workflowengine.postgresql.persistence.size }}
+{{- end }}

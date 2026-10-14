@@ -1,0 +1,165 @@
+{{- if .Values.appApi.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "nextcloud-stack.exappsNamespace" . }}
+  labels:
+    app.kubernetes.io/component: exapps
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-harp
+  labels:
+    app.kubernetes.io/component: appapi-harp
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-harp
+  namespace: {{ include "nextcloud-stack.exappsNamespace" . }}
+  labels:
+    app.kubernetes.io/component: appapi-harp
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-harp
+  namespace: {{ include "nextcloud-stack.exappsNamespace" . }}
+  labels:
+    app.kubernetes.io/component: appapi-harp
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "nextcloud-stack.fullname" . }}-harp
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nextcloud-stack.fullname" . }}-harp
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-harp-certs
+  labels:
+    app.kubernetes.io/component: appapi-harp
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.appApi.certStorage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-harp
+  labels:
+    app.kubernetes.io/component: appapi-harp
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: appapi-harp
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.appApi.servicePort }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-harp
+  labels:
+    app.kubernetes.io/component: appapi-harp
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: appapi-harp
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: appapi-harp
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "nextcloud-stack.fullname" . }}-harp
+      containers:
+        - name: harp
+          image: "{{ .Values.appApi.image.repository }}:{{ .Values.appApi.image.tag }}"
+          imagePullPolicy: {{ .Values.appApi.image.pullPolicy }}
+          env:
+            - name: HP_SHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: harp-shared-key
+            - name: NC_INSTANCE_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}"
+            - name: HP_EXAPPS_ADDRESS
+              value: "0.0.0.0:{{ .Values.appApi.servicePort }}"
+            - name: HP_TRUSTED_PROXY_IPS
+              value: {{ join "," .Values.nextcloud.trustedProxies | quote }}
+            - name: HP_LOG_LEVEL
+              value: {{ .Values.appApi.logLevel | quote }}
+            - name: HP_K8S_ENABLED
+              value: "true"
+            - name: HP_K8S_NAMESPACE
+              value: {{ include "nextcloud-stack.exappsNamespace" . | quote }}
+            - name: HP_K8S_DEFAULT_STORAGE_SIZE
+              value: {{ .Values.appApi.defaultStorageSize | quote }}
+            {{- if .Values.appApi.storageClass }}
+            - name: HP_K8S_STORAGE_CLASS
+              value: {{ .Values.appApi.storageClass | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.appApi.servicePort }}
+          startupProbe:
+            tcpSocket:
+              port: http
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+          resources:
+            {{- toYaml .Values.appApi.resources | nindent 12 }}
+      volumes:
+        - name: certs
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-harp-certs
+{{- end }}

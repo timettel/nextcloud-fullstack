@@ -1,0 +1,370 @@
+{{- $antiAffinity := required "redis.scheduling.antiAffinity must be set by values-test.yaml or values-prod.yaml" .Values.redis.scheduling.antiAffinity }}
+{{- if not (has $antiAffinity (list "preferred" "required")) }}
+{{- fail "redis.scheduling.antiAffinity must be preferred or required" }}
+{{- end }}
+{{- if lt (int .Values.redis.replicas) 3 }}
+{{- fail "redis.replicas must be at least 3 for Sentinel quorum and failover" }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-redis-headless
+  labels:
+    app.kubernetes.io/component: redis
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+    - name: sentinel
+      port: 26379
+      targetPort: sentinel
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-redis
+  labels:
+    app.kubernetes.io/component: redis-proxy
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: redis-proxy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-redis
+  labels:
+    app.kubernetes.io/component: redis
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "nextcloud-stack.fullname" . }}-redis-headless
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.redis.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: redis
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      affinity:
+        podAntiAffinity:
+          {{- if eq $antiAffinity "required" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: redis
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+              topologyKey: {{ .Values.redis.scheduling.topologyKey | quote }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/component: redis
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+                topologyKey: {{ .Values.redis.scheduling.topologyKey | quote }}
+          {{- end }}
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              ordinal="${HOSTNAME##*-}"
+              master_host=""
+
+              # Rejoin the master remembered by any surviving Sentinel. On the
+              # first boot, ordinal zero becomes the initial master.
+              i=0
+              while [ "$i" -lt {{ .Values.redis.replicas }} ]; do
+                candidate="{{ include "nextcloud-stack.fullname" . }}-redis-${i}.{{ include "nextcloud-stack.fullname" . }}-redis-headless"
+                master_host="$(redis-cli --no-auth-warning -h "$candidate" -p 26379 \
+                  -a "$REDIS_PASSWORD" SENTINEL get-master-addr-by-name "$REDIS_MASTER_SET" \
+                  2>/dev/null | sed -n '1p' || true)"
+                [ -n "$master_host" ] && break
+                i=$((i + 1))
+              done
+
+              if [ -z "$master_host" ] && [ "$ordinal" != "0" ]; then
+                master_host="{{ include "nextcloud-stack.fullname" . }}-redis-0.{{ include "nextcloud-stack.fullname" . }}-redis-headless"
+              fi
+
+              {
+                echo 'bind 0.0.0.0'
+                echo 'protected-mode yes'
+                echo 'port 6379'
+                printf 'requirepass "%s"\n' "$REDIS_PASSWORD"
+                printf 'masterauth "%s"\n' "$REDIS_PASSWORD"
+                echo 'dir /data/redis'
+                echo 'appendonly {{ ternary "yes" "no" .Values.redis.appendOnly }}'
+                echo 'appendfsync everysec'
+                echo 'repl-diskless-sync yes'
+                printf 'replica-announce-ip %s.%s\n' "$HOSTNAME" "$REDIS_HEADLESS_SERVICE"
+                echo 'replica-announce-port 6379'
+                if [ -n "$master_host" ] && [ "${master_host%%.*}" != "$HOSTNAME" ]; then
+                  printf 'replicaof %s 6379\n' "$master_host"
+                fi
+              } > /tmp/redis.conf
+
+              mkdir -p /data/redis
+              exec redis-server /tmp/redis.conf
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: redis-password
+            - name: REDIS_MASTER_SET
+              value: {{ .Values.redis.sentinel.masterSet | quote }}
+            - name: REDIS_HEADLESS_SERVICE
+              value: {{ include "nextcloud-stack.fullname" . }}-redis-headless
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: [/bin/sh, -c, 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping | grep -q PONG']
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [/bin/sh, -c, 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping | grep -q PONG']
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+        - name: sentinel
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              config=/data/sentinel/sentinel.conf
+              mkdir -p /data/sentinel
+              if [ ! -s "$config" ]; then
+                {
+                  echo 'bind 0.0.0.0'
+                  echo 'protected-mode yes'
+                  echo 'port 26379'
+                  printf 'requirepass "%s"\n' "$REDIS_PASSWORD"
+                  echo 'sentinel resolve-hostnames yes'
+                  echo 'sentinel announce-hostnames yes'
+                  printf 'sentinel monitor %s %s 6379 %s\n' \
+                    "$REDIS_MASTER_SET" "$INITIAL_MASTER" "$REDIS_SENTINEL_QUORUM"
+                  printf 'sentinel auth-pass %s "%s"\n' "$REDIS_MASTER_SET" "$REDIS_PASSWORD"
+                  printf 'sentinel down-after-milliseconds %s %s\n' \
+                    "$REDIS_MASTER_SET" "$REDIS_DOWN_AFTER"
+                  printf 'sentinel failover-timeout %s %s\n' \
+                    "$REDIS_MASTER_SET" "$REDIS_FAILOVER_TIMEOUT"
+                  printf 'sentinel parallel-syncs %s 1\n' "$REDIS_MASTER_SET"
+                } > "$config"
+              fi
+              exec redis-sentinel "$config"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: redis-password
+            - name: REDIS_MASTER_SET
+              value: {{ .Values.redis.sentinel.masterSet | quote }}
+            - name: REDIS_SENTINEL_QUORUM
+              value: {{ .Values.redis.sentinel.quorum | quote }}
+            - name: REDIS_DOWN_AFTER
+              value: {{ .Values.redis.sentinel.downAfterMilliseconds | quote }}
+            - name: REDIS_FAILOVER_TIMEOUT
+              value: {{ .Values.redis.sentinel.failoverTimeout | quote }}
+            - name: INITIAL_MASTER
+              value: {{ include "nextcloud-stack.fullname" . }}-redis-0.{{ include "nextcloud-stack.fullname" . }}-redis-headless
+          ports:
+            - name: sentinel
+              containerPort: 26379
+          readinessProbe:
+            exec:
+              command: [/bin/sh, -c, 'redis-cli --no-auth-warning -p 26379 -a "$REDIS_PASSWORD" ping | grep -q PONG']
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [/bin/sh, -c, 'redis-cli --no-auth-warning -p 26379 -a "$REDIS_PASSWORD" ping | grep -q PONG']
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.redis.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-redis-proxy
+  labels:
+    app.kubernetes.io/component: redis-proxy
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.redis.proxy.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis-proxy
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: redis-proxy
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      affinity:
+        podAntiAffinity:
+          {{- if eq $antiAffinity "required" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: redis-proxy
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+              topologyKey: {{ .Values.redis.scheduling.topologyKey | quote }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/component: redis-proxy
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+                topologyKey: {{ .Values.redis.scheduling.topologyKey | quote }}
+          {{- end }}
+      initContainers:
+        - name: configure-haproxy
+          image: "{{ .Values.redis.proxy.image.repository }}:{{ .Values.redis.proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.proxy.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              dns_server="$(awk '/^nameserver / { print $2; exit }' /etc/resolv.conf)"
+              i=0
+              while [ "$i" -lt {{ .Values.redis.replicas }} ]; do
+                redis_host="{{ include "nextcloud-stack.fullname" . }}-redis-${i}.{{ include "nextcloud-stack.fullname" . }}-redis-headless.{{ .Release.Namespace }}.svc.cluster.local"
+                until getent hosts "$redis_host" >/dev/null 2>&1; do
+                  echo "Waiting for Redis DNS: $redis_host"
+                  sleep 2
+                done
+                i=$((i + 1))
+              done
+              {
+                echo 'global'
+                echo '  log stdout format raw local0'
+                echo 'defaults'
+                echo '  mode tcp'
+                echo '  timeout connect 3s'
+                echo '  timeout client 30s'
+                echo '  timeout server 30s'
+                echo 'resolvers kubernetes'
+                printf '  nameserver dns %s:53\n' "$dns_server"
+                echo '  resolve_retries 3'
+                echo '  timeout retry 1s'
+                echo '  hold valid 10s'
+                echo 'frontend redis'
+                echo '  bind :6379'
+                echo '  default_backend redis_master'
+                echo 'backend redis_master'
+                echo '  option tcp-check'
+                echo '  tcp-check connect'
+                printf '  tcp-check send "AUTH %s\\r\\n"\n' "$REDIS_PASSWORD"
+                echo '  tcp-check expect string +OK'
+                echo '  tcp-check send "ROLE\r\n"'
+                echo '  tcp-check expect string master'
+                i=0
+                while [ "$i" -lt {{ .Values.redis.replicas }} ]; do
+                  printf '  server redis-%s %s-redis-%s.%s-redis-headless.%s.svc.cluster.local:6379 check inter 2s fall 2 rise 1 resolvers kubernetes init-addr libc,none\n' \
+                    "$i" "{{ include "nextcloud-stack.fullname" . }}" "$i" "{{ include "nextcloud-stack.fullname" . }}" "{{ .Release.Namespace }}"
+                  i=$((i + 1))
+                done
+              } > /haproxy/haproxy.cfg
+              haproxy -c -f /haproxy/haproxy.cfg
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: redis-password
+          volumeMounts:
+            - name: config
+              mountPath: /haproxy
+      containers:
+        - name: haproxy
+          image: "{{ .Values.redis.proxy.image.repository }}:{{ .Values.redis.proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.proxy.image.pullPolicy }}
+          args: [-f, /usr/local/etc/haproxy/haproxy.cfg]
+          ports:
+            - name: redis
+              containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: redis-password
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - 'printf "AUTH %s\r\nPING\r\n" "$REDIS_PASSWORD" | nc -w 2 127.0.0.1 6379 | grep -q +PONG'
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/etc/haproxy/haproxy.cfg
+              subPath: haproxy.cfg
+              readOnly: true
+          resources:
+            {{- toYaml .Values.redis.proxy.resources | nindent 12 }}
+      volumes:
+        - name: config
+          emptyDir: {}

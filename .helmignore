@@ -1,0 +1,10 @@
+.git/
+.gitignore
+.DS_Store
+*.swp
+*.swo
+*~
+values-local.yaml
+values-*.local.yaml
+secrets*.yaml
+rendered*.yaml

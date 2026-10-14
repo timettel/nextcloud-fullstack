@@ -1,0 +1,693 @@
+# =============================================================================
+# OPERATOR CONFIGURATION
+# =============================================================================
+# This is the only section that normally needs editing. Values below this block
+# are component defaults and capacity tuning knobs.
+operator:
+  # Required: public DNS zone used for every endpoint and for the mail domain.
+  domain: example.com
+  # Required when Talk is enabled: public IPv4/IPv6 address advertised by TURN.
+  publicIp: 203.0.113.10
+  # Optional ACME account contact. Empty is accepted by Let's Encrypt.
+  acmeEmail: ""
+  # Labels are joined with operator.domain. Use "" for the bare domain.
+  subdomains:
+    nextcloud: nc
+    office: office
+    talk: talk
+    turn: turn
+    recording: recording
+    keycloak: auth
+    ldap: ldap
+    mail: mail
+    webmail: webmail
+    phpmyadmin: db
+    workflow: windmill
+  # Required credentials. These are deliberately operator-managed because they
+  # are recovery/admin entry points. They are stored in a Kubernetes Secret.
+  admins:
+    nextcloud:
+      username: admin
+      password: CHANGE_ME
+    ldap:
+      username: admin
+      email: admin@example.com
+      password: CHANGE_ME
+    keycloak:
+      username: admin
+      password: CHANGE_ME
+  ldap:
+    # Empty derives dc=lab,dc=ettel,dc=net from operator.domain.
+    baseDn: ""
+  # Optional internal overrides. Empty values are generated once and retained
+  # across Helm upgrades with lookup(). They normally stay empty.
+  optionalSecrets:
+    mariadbRootPassword: ""
+    mariadbPassword: ""
+    redisPassword: ""
+    windmillAdminPassword: ""
+    windmillDatabasePassword: ""
+    euroofficeJwtSecret: ""
+    talkSignalingSecret: ""
+    talkInternalSecret: ""
+    turnSecret: ""
+    talkRecordingSecret: ""
+    keycloakDatabasePassword: ""
+    keycloakClientSecret: ""
+    roundcubeOauthClientSecret: ""
+    roundcubeDatabasePassword: ""
+    roundcubeDesKey: ""
+    phpmyadminDatabasePassword: ""
+    phpmyadminOauthClientSecret: ""
+    phpmyadminOauthCookieSecret: ""
+    lldapJwtSecret: ""
+    lldapKeySeed: ""
+    ldapBindPassword: ""
+    mailServicePassword: ""
+    nextcloudMailMasterPassword: ""
+    whiteboardJwtSecret: ""
+    # May be populated while primary object storage remains disabled.
+    s3AccessKey: ""
+    s3SecretKey: ""
+# Must be set to test or prod by the corresponding profile file.
+deploymentProfile: ""
+nextcloud:
+  replicas: 2
+  image:
+    repository: nextcloud
+    tag: 35.0.1-apache
+    pullPolicy: IfNotPresent
+  storage: 50Gi
+  persistence:
+    # Test uses RWO because both replicas may share the single k3s node.
+    # Production overrides this to RWX for replicas on different nodes.
+    accessMode: ReadWriteOnce
+    storageClass: ""
+  # Primary object storage is an installation-time decision. The startup hook
+  # refuses to enable or disable it on an already installed instance.
+  objectStore:
+    enabled: false
+    s3:
+      hostname: fsn1.your-objectstorage.com
+      port: 443
+      bucket: lab-ettel-net
+      region: fsn1
+      useSsl: true
+      usePathStyle: true
+      # Empty derives <operator.domain>/urn:oid:.
+      objectPrefix: ""
+  scheduling:
+    topologyKey: kubernetes.io/hostname
+  phpSession:
+    enabled: true
+    redisDatabase: 2
+    lockingEnabled: true
+    lockRetries: -1
+    lockWaitTime: 10000
+  phpMemoryLimit: 1G
+  phpUploadLimit: 2G
+  opcache:
+    memoryConsumption: 512
+    internedStringsBuffer: 256
+    maxAcceleratedFiles: 50000
+  hsts:
+    enabled: true
+    maxAge: 31536000
+    includeSubDomains: true
+  # Applied by the post-install/post-upgrade bootstrap Job.
+  systemConfig:
+    defaultLanguage: de_DE
+    defaultLocale: de_DE
+    defaultPhoneRegion: DE
+    defaultTimezone: Europe/Berlin
+    # UTC hour at which the four-hour maintenance window starts (0-23).
+    maintenanceWindowStart: 1
+    # Unique integer per Nextcloud web/PHP server (0-511).
+    serverId: 1
+  maintenance:
+    addMissingIndices: true
+    runExpensiveRepairs: true
+    convertMysqlCharset: true
+  # nc-skeleton/ is packaged as an OCI image by deploy.sh, then mirrored into
+  # core/skeleton by the bootstrap Job on any Kubernetes node.
+  skeleton:
+    enabled: true
+    maxSizeMiB: 100
+    image:
+      repository: nextcloud-skeleton
+      # Empty uses the generated nc-skeleton/.image-tag file.
+      tag: ""
+      pullPolicy: IfNotPresent
+  # These apps are installed and enabled by the bootstrap Job on every release.
+  apps:
+    - calendar
+    - contacts
+    - deck
+    - forms
+    - collectives
+    - notes
+    - maps
+    - music
+    - news
+    - cookbook
+    - tables
+    - polls
+    - twofactor_nextcloud_notification
+    - twofactor_email
+    - twofactor_backupcodes
+    - twofactor_totp
+    - socialsharing_email
+    - sharing
+    - sharebymail
+    - privacy
+    - notifications
+    - groupfolders
+    - files_external
+    - files_confidential
+    - files_automatedtagging
+    - files_accesscontrol
+    - external
+    - epubviewer
+    - cospend
+    - comments
+    - analytics
+    - files_mindmap
+    - drawio
+  # Apps listed here are disabled after all installation and integration steps.
+  disabledApps:
+    - firstrunwizard
+  # Pod networks that may forward the original client address to Nextcloud.
+  trustedProxies:
+    - 10.42.0.0/16
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+mariadb:
+  image:
+    repository: mariadb
+    tag: "12.3.3"
+    pullPolicy: IfNotPresent
+  replicas: 3
+  database: nextcloud
+  username: nextcloud
+  storage: 10Gi
+  innodbBufferPoolSize: 1G
+  characterSet: utf8mb4
+  collation: utf8mb4_general_ci
+  innodbLogFileSize: 256M
+  tableOpenCache: 4000
+  tableDefinitionCache: 4000
+  slowQueryLog:
+    enabled: true
+    file: slow-queries.log
+    longQueryTime: 2
+  galera:
+    replicaThreads: 4
+  scheduling:
+    topologyKey: kubernetes.io/hostname
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+redis:
+  replicas: 3
+  image:
+    repository: redis
+    tag: 8.10.2-alpine
+    pullPolicy: IfNotPresent
+  storage: 2Gi
+  storageClass: ""
+  appendOnly: true
+  scheduling:
+    topologyKey: kubernetes.io/hostname
+  sentinel:
+    masterSet: nextcloud
+    quorum: 2
+    downAfterMilliseconds: 5000
+    failoverTimeout: 60000
+  proxy:
+    replicas: 2
+    image:
+      repository: haproxy
+      tag: 3.2-alpine
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 128Mi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+# LLDAP is the authoritative user and group directory. Nextcloud authenticates
+# directly against it; Keycloak federates the same identities for OIDC clients.
+identityDirectory:
+  enabled: true
+  # Nextcloud has no server-side switch for disabling local account creation.
+  # Hide its user-management button when LDAP is the authoritative directory.
+  hideNextcloudUserCreation: true
+  image:
+    repository: lldap/lldap
+    tag: stable
+    pullPolicy: IfNotPresent
+  bindAccount:
+    username: nextcloud-directory
+    displayName: Nextcloud LDAP Password Manager
+  nextcloudUsersGroup: nc-users
+  nextcloudAdminsGroup: nc-admin
+  storage: 5Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+# Postfix and Dovecot are provided by Docker Mailserver. LLDAP remains the
+# authoritative account and password source; its `mail` attribute must contain
+# the complete mailbox address below this domain.
+mail:
+  enabled: true
+  serviceAccount:
+    username: nextcloud
+    displayName: Nextcloud System Mail
+  image:
+    repository: ghcr.io/docker-mailserver/docker-mailserver
+    tag: latest
+    pullPolicy: Always
+  storage:
+    mail: 20Gi
+    state: 2Gi
+    logs: 2Gi
+    config: 1Gi
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+  messageSizeLimitBytes: "52428800"
+  rspamd:
+    enabled: true
+  managesieve:
+    enabled: true
+    port: 4190
+  nextcloud:
+    installApp: true
+    imapPort: 993
+    imapSslMode: ssl
+    smtpPort: 465
+    smtpSslMode: ssl
+    # OIDC logins do not expose the LDAP password to Nextcloud Mail.
+    masterUser: nextcloud-mail
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+# Roundcube uses Keycloak for OIDC login and forwards the resulting access
+# token to Docker Mailserver through XOAUTH2. LDAP still provisions mailboxes.
+roundcube:
+  enabled: true
+  clientId: roundcube
+  image:
+    repository: roundcube/roundcubemail
+    tag: 1.7.4-apache
+    pullPolicy: IfNotPresent
+  database:
+    image:
+      repository: postgres
+      tag: 18-alpine
+      pullPolicy: IfNotPresent
+    storage: 5Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  nextcloudMenu:
+    enabled: true
+    name: Webmail
+    openInNewTab: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+# phpMyAdmin is exposed through Keycloak by default. Only members of the
+# configured group are admitted; phpMyAdmin then uses this dedicated MariaDB
+# account, which is restricted to the Nextcloud database.
+phpmyadmin:
+  enabled: true
+  databaseUser: phpmyadmin
+  auth:
+    # Supported modes: keycloak, database
+    mode: keycloak
+    clientId: phpmyadmin
+    allowedGroup: nc-admin
+  image:
+    repository: phpmyadmin
+    tag: 5.2.3-apache
+    pullPolicy: IfNotPresent
+  oauth2Proxy:
+    image:
+      repository: quay.io/oauth2-proxy/oauth2-proxy
+      tag: v7.15.5
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 20m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 128Mi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+fulltextsearch:
+  enabled: true
+  # The Nextcloud 35 connector contains clients for Elasticsearch 8 and 9.
+  elasticsearch:
+    version: "9.5.5"
+    replicas: 3
+    index: nextcloud
+    storage: 20Gi
+    storageClass: ""
+    scheduling:
+      topologyKey: kubernetes.io/hostname
+      # Set by values-test.yaml or values-prod.yaml.
+      antiAffinity: ""
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  files:
+    local: true
+    external: false
+    groupFolders: true
+    pdf: true
+    office: true
+    zip: false
+    maxSizeMb: 100
+  live:
+    enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+notifyPush:
+  enabled: true
+  port: 7867
+  logLevel: info
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+appApi:
+  enabled: true
+  daemonName: kubernetes_harp
+  displayName: Kubernetes HaRP
+  image:
+    repository: ghcr.io/nextcloud/nextcloud-appapi-harp
+    tag: release
+    pullPolicy: Always
+  servicePort: 8780
+  # Empty derives a release-specific namespace such as nc-lab-nextcloud-stack-exapps.
+  exappsNamespace: ""
+  exposeType: clusterip
+  storageClass: ""
+  defaultStorageSize: 10Gi
+  certStorage: 1Gi
+  logLevel: info
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+# Windmill is the supported workflow engine for Nextcloud 35. It needs its own
+# PostgreSQL database; the Nextcloud Galera cluster cannot be used for it.
+workflowengine:
+  enabled: true
+  # Installed only while the workflow engine is enabled. On an existing
+  # release, switching enabled to false disables these apps without deleting
+  # their data.
+  nextcloudApps:
+    - webhook_listeners
+    - integration_windmill
+  publicAccess: true
+  webhookWorkers: 2
+  workspaceId: nextcloud
+  workspaceName: Nextcloud Workflows
+  postgresql:
+    # Managed by this parent chart so its password can use the same generated,
+    # upgrade-stable secret lifecycle as the other internal credentials.
+    enabled: false
+    auth:
+      postgresUser: postgres
+      database: windmill
+    persistence:
+      enabled: true
+      storageClass: ""
+      accessMode: ReadWriteOnce
+      size: 20Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  windmill:
+    appReplicas: 1
+    extraReplicas: 1
+    # Internal compatibility value for the Windmill dependency. deploy.sh
+    # derives and overrides it from operator.subdomains.workflow.
+    baseDomain: windmill.example.com
+    baseProtocol: https
+    databaseUrlSecretName: windmill-database
+    databaseUrlSecretKey: url
+    databaseUrlAsFile: true
+    exposeHostDocker: false
+    workerGroups:
+      - name: default
+        controller: Deployment
+        replicas: 1
+        privileged: false
+        disableUnsharePid: true
+        automountServiceAccountToken: false
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+    app:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+    windmillExtra:
+      enableLsp: true
+      enableDebugger: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+  ingress:
+    enabled: false
+  httproute:
+    enabled: false
+# Keycloak is the central OpenID Connect identity provider. Nextcloud users are
+# created on first login and groups matching groupWhitelistRegex are reconciled
+# from the groups claim.
+keycloak:
+  enabled: true
+  image:
+    repository: quay.io/keycloak/keycloak
+    tag: "26.7.5"
+    pullPolicy: IfNotPresent
+  realm: nextcloud
+  clientId: nextcloud
+  providerIdentifier: keycloak
+  groupClaim: groups
+  groupWhitelistRegex: "/^nc-/"
+  restrictLoginToGroups: true
+  defaultGroups:
+    - nc-users
+  ldapSync:
+    # LLDAP does not implement the createTimestamp/modifyTimestamp comparison
+    # filters required by Keycloak's incremental changed-users sync.
+    fullPeriodSeconds: 300
+    changedPeriodSeconds: -1
+  adminGroupSync:
+    # Only used when Keycloak itself is the primary Nextcloud user backend.
+    # LDAP-backed installations map the LDAP admin group directly instead.
+    enabled: false
+    sourceGroup: nc-admin
+    schedule: "*/2 * * * *"
+    preservedAdmins:
+      - admin
+  storage: 10Gi
+  postgresql:
+    image:
+      repository: postgres
+      tag: 18-alpine
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+whiteboard:
+  enabled: true
+  image:
+    repository: ghcr.io/nextcloud-releases/whiteboard
+    tag: stable
+    pullPolicy: Always
+  path: /whiteboard
+  port: 3002
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+clamav:
+  enabled: true
+  image:
+    repository: clamav/clamav
+    tag: stable_base
+    pullPolicy: IfNotPresent
+  storage: 2Gi
+  # Must match Nextcloud's av_stream_max_length setting below.
+  streamMaxLength: 2G
+  streamMaxLengthBytes: 2147483648
+  # Existing files found by background scans are logged, not deleted automatically.
+  infectedAction: only_log
+  resources:
+    requests:
+      cpu: 250m
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+talk:
+  enabled: true
+  image:
+    repository: ghcr.io/nextcloud-releases/aio-talk
+    tag: "20260916_075031"
+    pullPolicy: IfNotPresent
+  turnPort: 443
+  internalTurnPort: 3478
+  relayPortMin: 49160
+  relayPortMax: 49200
+  maxStreamBitrate: 2097152
+  maxScreenBitrate: 4194304
+  logLevel: warn
+  coturn:
+    image:
+      repository: ghcr.io/coturn/coturn
+      tag: 4.18.0-r0
+      pullPolicy: IfNotPresent
+  recording:
+    enabled: true
+    image:
+      repository: ghcr.io/nextcloud-releases/aio-talk-recording
+      tag: "20260916_075031"
+      pullPolicy: IfNotPresent
+    # Temporary recordings remain here until they are uploaded to Nextcloud.
+    storage: 20Gi
+    sharedMemory: 2Gi
+    logLevel: warn
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "4"
+        memory: 6Gi
+  resources:
+    hpb:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    coturn:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+eurooffice:
+  installApp: true
+  jwtHeader: AuthorizationJWT
+  image:
+    repository: ghcr.io/euro-office/documentserver
+    tag: latest
+    pullPolicy: Always
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 6Gi
+gateway:
+  className: traefik
+  # Traefik exposes these internal entry points as service ports 80 and 443.
+  httpPort: 8000
+  httpsPort: 8443
+certificate:
+  acmeServer: https://acme-v02.api.letsencrypt.org/directory

@@ -1,0 +1,117 @@
+{{- if .Values.notifyPush.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-notify-push
+  labels:
+    app.kubernetes.io/component: notify-push
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: notify-push
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.notifyPush.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-notify-push
+  labels:
+    app.kubernetes.io/component: notify-push
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: notify-push
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: notify-push
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      initContainers:
+        {{- include "nextcloud-stack.waitForNextcloud" . | nindent 8 }}
+      containers:
+        - name: notify-push
+          image: "{{ .Values.nextcloud.image.repository }}:{{ .Values.nextcloud.image.tag }}"
+          imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              case "$(uname -m)" in
+                x86_64) architecture=x86_64 ;;
+                aarch64|arm64) architecture=aarch64 ;;
+                armv7l) architecture=armv7 ;;
+                *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+              esac
+              binary="/var/www/html/custom_apps/notify_push/bin/$architecture/notify_push"
+              echo "Waiting for the notify_push app binary..."
+              for attempt in $(seq 1 360); do
+                if [ -x "$binary" ]; then
+                  redis_password=$(php -r 'echo rawurlencode(getenv("REDIS_PASSWORD"));')
+                  export REDIS_URL="redis://:$redis_password@$REDIS_HOST:6379"
+                  exec "$binary" /var/www/html/config/config.php
+                fi
+                sleep 5
+              done
+              echo "notify_push binary did not appear within 30 minutes" >&2
+              exit 1
+          env:
+            - name: PORT
+              value: {{ .Values.notifyPush.port | quote }}
+            - name: LOG
+              value: {{ .Values.notifyPush.logLevel | quote }}
+            - name: NEXTCLOUD_URL
+              value: "http://{{ include "nextcloud-stack.fullname" . }}-nextcloud/"
+            - name: REDIS_HOST
+              value: {{ include "nextcloud-stack.fullname" . }}-redis
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: redis-password
+          ports:
+            - name: http
+              containerPort: {{ .Values.notifyPush.port }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - >-
+                  test ! -d /var/www/html/custom_apps/notify_push/bin ||
+                  php -r '$socket = @fsockopen("127.0.0.1", getenv("PORT"), $errno, $errstr, 2); if (!$socket) { exit(1); } fclose($socket);'
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - >-
+                  test ! -d /var/www/html/custom_apps/notify_push/bin ||
+                  php -r '$socket = @fsockopen("127.0.0.1", getenv("PORT"), $errno, $errstr, 2); if (!$socket) { exit(1); } fclose($socket);'
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          volumeMounts:
+            - name: nextcloud
+              mountPath: /var/www/html
+              readOnly: true
+          resources:
+            {{- toYaml .Values.notifyPush.resources | nindent 12 }}
+      volumes:
+        - name: nextcloud
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+{{- end }}

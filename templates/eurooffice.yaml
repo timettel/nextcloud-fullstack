@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-eurooffice
+  labels:
+    app.kubernetes.io/component: eurooffice
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: eurooffice
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-eurooffice
+  labels:
+    app.kubernetes.io/component: eurooffice
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: eurooffice
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: eurooffice
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: eurooffice
+          image: "{{ .Values.eurooffice.image.repository }}:{{ .Values.eurooffice.image.tag }}"
+          imagePullPolicy: {{ .Values.eurooffice.image.pullPolicy }}
+          env:
+            - name: JWT_ENABLED
+              value: "true"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: eurooffice-jwt-secret
+            - name: JWT_HEADER
+              value: AuthorizationJWT
+            - name: EXAMPLE_ENABLED
+              value: "false"
+            - name: ALLOW_PRIVATE_IP_ADDRESS
+              value: "true"
+            - name: NGINX_CLIENT_MAX_BODY_SIZE
+              value: 2g
+            - name: MAX_FILE_SIZE
+              value: "2147483648"
+          ports:
+            - name: http
+              containerPort: 80
+          startupProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            failureThreshold: 90
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/euro-office/documentserver
+          resources:
+            {{- toYaml .Values.eurooffice.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-eurooffice

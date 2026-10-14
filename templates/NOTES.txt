@@ -1,0 +1,61 @@
+Endpoints
+  Nextcloud:  https://{{ include "nextcloud-stack.host" (list . "nextcloud") }}
+  EuroOffice: https://{{ include "nextcloud-stack.host" (list . "office") }}
+{{- if .Values.workflowengine.enabled }}
+  Windmill:   https://{{ include "nextcloud-stack.host" (list . "workflow") }}
+{{- end }}
+{{- if .Values.keycloak.enabled }}
+  Keycloak:   https://{{ include "nextcloud-stack.host" (list . "keycloak") }}/admin/
+{{- end }}
+{{- if .Values.roundcube.enabled }}
+  Webmail:    https://{{ include "nextcloud-stack.host" (list . "webmail") }}/
+{{- end }}
+{{- if .Values.phpmyadmin.enabled }}
+  phpMyAdmin: https://{{ include "nextcloud-stack.phpmyadminHost" . }}/
+{{- end }}
+{{- if .Values.identityDirectory.enabled }}
+  LLDAP:      https://{{ include "nextcloud-stack.host" (list . "ldap") }}/
+{{- end }}
+
+{{- if .Values.roundcube.enabled }}
+Access
+  Webmail authentication: Keycloak OIDC with XOAUTH2
+  Nextcloud direct login: https://{{ include "nextcloud-stack.host" (list . "nextcloud") }}/login?direct=1
+
+{{- end }}
+Enabled integrations
+  notify_push: https://{{ include "nextcloud-stack.host" (list . "nextcloud") }}/push
+  ClamAV:      {{ include "nextcloud-stack.fullname" . }}-clamav:3310
+{{- if .Values.fulltextsearch.enabled }}
+  Search:      Elasticsearch {{ .Values.fulltextsearch.elasticsearch.version }} ({{ .Values.fulltextsearch.elasticsearch.replicas }} nodes)
+{{- end }}
+{{- if .Values.appApi.enabled }}
+  AppAPI:      HaRP, namespace {{ include "nextcloud-stack.exappsNamespace" . }}
+{{- end }}
+{{- if .Values.workflowengine.enabled }}
+  Workflow:    Windmill ({{ .Values.workflowengine.webhookWorkers }} webhook workers)
+{{- end }}
+{{- if .Values.keycloak.enabled }}
+  OIDC:        Keycloak realm {{ .Values.keycloak.realm }}
+{{- if .Values.identityDirectory.enabled }}
+  Directory:   LLDAP, user group {{ .Values.identityDirectory.nextcloudUsersGroup }}, admin group {{ .Values.identityDirectory.nextcloudAdminsGroup }}
+{{- end }}
+{{- end }}
+{{- if .Values.whiteboard.enabled }}
+  Whiteboard:  https://{{ include "nextcloud-stack.host" (list . "nextcloud") }}{{ .Values.whiteboard.path }}
+{{- end }}
+{{- if .Values.mail.enabled }}
+  Mail:        {{ include "nextcloud-stack.host" (list . "mail") }} (SMTP 25/465/587, IMAPS 993{{- if .Values.mail.managesieve.enabled }}, ManageSieve {{ .Values.mail.managesieve.port }}{{- end }})
+{{- end }}
+{{- if .Values.talk.enabled }}
+  Talk HPB:    https://{{ include "nextcloud-stack.host" (list . "talk") }}/standalone-signaling/
+  TURN:        {{ include "nextcloud-stack.host" (list . "turn") }}:{{ .Values.talk.turnPort }} (UDP/TLS)
+{{- if .Values.talk.recording.enabled }}
+  Recording:   https://{{ include "nextcloud-stack.host" (list . "recording") }}/
+{{- end }}
+{{- end }}
+
+EuroOffice
+  Public URL:   https://{{ include "nextcloud-stack.host" (list . "office") }}/
+  Internal URL: http://{{ include "nextcloud-stack.fullname" . }}-eurooffice/
+  JWT secret:   Secret/{{ include "nextcloud-stack.fullname" . }}

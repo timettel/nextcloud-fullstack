@@ -1,0 +1,314 @@
+{{- if .Values.keycloak.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak-realm
+  labels:
+    app.kubernetes.io/component: keycloak
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+data:
+  {{ .Values.keycloak.realm }}-realm.json: |
+    {
+      "realm": {{ .Values.keycloak.realm | quote }},
+      "enabled": true,
+      "displayName": "Nextcloud",
+      "registrationAllowed": false,
+      "resetPasswordAllowed": true,
+      "rememberMe": true,
+      "loginWithEmailAllowed": true,
+      "duplicateEmailsAllowed": false,
+      "groups": [
+        {{- range $index, $group := .Values.keycloak.defaultGroups }}
+        {{- if $index }},{{ end }}
+        { "name": {{ $group | quote }} }
+        {{- end }}
+      ],
+      "defaultGroups": [
+        {{- range $index, $group := .Values.keycloak.defaultGroups }}
+        {{- if $index }},{{ end }}
+        {{ printf "/%s" $group | quote }}
+        {{- end }}
+      ],
+      "clients": [
+        {
+          "clientId": {{ .Values.keycloak.clientId | quote }},
+          "name": "Nextcloud",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "secret": "${NEXTCLOUD_CLIENT_SECRET}",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "rootUrl": "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}",
+          "baseUrl": "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}",
+          "redirectUris": [
+            "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}/apps/user_oidc/code",
+            "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}/index.php/apps/user_oidc/code"
+          ],
+          "webOrigins": ["https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}"],
+          "attributes": {
+            "backchannel.logout.url": "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}/index.php/apps/user_oidc/backchannel-logout/{{ .Values.keycloak.providerIdentifier }}",
+            "backchannel.logout.session.required": "true",
+            "post.logout.redirect.uris": "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}/*"
+          },
+          "protocolMappers": [
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "consentRequired": false,
+              "config": {
+                "claim.name": {{ .Values.keycloak.groupClaim | quote }},
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        }{{- if .Values.roundcube.enabled }},
+        {
+          "clientId": {{ .Values.roundcube.clientId | quote }},
+          "name": "Roundcube Webmail",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "secret": "${ROUNDCUBE_CLIENT_SECRET}",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "rootUrl": "https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}",
+          "baseUrl": "https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}",
+          "redirectUris": ["https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}/index.php/login/oauth"],
+          "webOrigins": ["https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}"],
+          "attributes": {
+            "post.logout.redirect.uris": "https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}/*"
+          }
+        }
+        {{- end }}
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak-postgresql
+  labels:
+    app.kubernetes.io/component: keycloak-postgresql
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: keycloak-postgresql
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak-postgresql
+  labels:
+    app.kubernetes.io/component: keycloak-postgresql
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "nextcloud-stack.fullname" . }}-keycloak-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: keycloak-postgresql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: keycloak-postgresql
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgresql
+          image: "{{ .Values.keycloak.postgresql.image.repository }}:{{ .Values.keycloak.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.postgresql.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: keycloak
+            - name: POSTGRES_USER
+              value: keycloak
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: keycloak-database-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, keycloak, -d, keycloak]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, keycloak, -d, keycloak]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.keycloak.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/component: keycloak-postgresql
+          {{- include "nextcloud-stack.labels" . | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.keycloak.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak
+  labels:
+    app.kubernetes.io/component: keycloak
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: keycloak
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: management
+      port: 9000
+      targetPort: management
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-keycloak
+  labels:
+    app.kubernetes.io/component: keycloak
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: keycloak
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: keycloak
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-postgresql
+          image: "{{ .Values.keycloak.postgresql.image.repository }}:{{ .Values.keycloak.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.postgresql.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              until pg_isready -h {{ include "nextcloud-stack.fullname" . }}-keycloak-postgresql -U keycloak -d keycloak; do
+                sleep 5
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: keycloak-database-password
+      containers:
+        - name: keycloak
+          image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.image.pullPolicy }}
+          command: [/opt/keycloak/bin/kc.sh]
+          args: [start, --import-realm]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://{{ include "nextcloud-stack.fullname" . }}-keycloak-postgresql:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: keycloak-database-password
+            - name: KC_HOSTNAME
+              value: "https://{{ (include "nextcloud-stack.host" (list . "keycloak")) }}"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: {{ .Values.operator.admins.keycloak.username | quote }}
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: keycloak-admin-password
+            - name: NEXTCLOUD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: keycloak-client-secret
+            {{- if .Values.roundcube.enabled }}
+            - name: ROUNDCUBE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: roundcube-oauth-client-secret
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-keycloak-realm
+{{- end }}

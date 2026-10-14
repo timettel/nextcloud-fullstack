@@ -1,0 +1,53 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-letsencrypt
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  acme:
+    {{- if .Values.operator.acmeEmail }}
+    email: {{ .Values.operator.acmeEmail | quote }}
+    {{- end }}
+    server: {{ .Values.certificate.acmeServer | quote }}
+    privateKeySecretRef:
+      name: {{ include "nextcloud-stack.fullname" . }}-letsencrypt-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+{{- if .Values.identityDirectory.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-internal-selfsigned
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ include "nextcloud-stack.fullname" . }} internal CA
+  secretName: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+  issuerRef:
+    name: {{ include "nextcloud-stack.fullname" . }}-internal-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+{{- end }}

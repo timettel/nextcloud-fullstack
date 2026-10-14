@@ -1,0 +1,92 @@
+{{- if .Values.workflowengine.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-windmill-bootstrap
+  labels:
+    app.kubernetes.io/component: windmill-bootstrap
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: windmill-bootstrap
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.nextcloud.image.repository }}:{{ .Values.nextcloud.image.tag }}"
+          imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              api=http://windmill-app:8000/api
+
+              echo "Waiting for the internal Windmill API..."
+              ready=false
+              for attempt in $(seq 1 120); do
+                if curl -fsS "$api/health/status" >/dev/null; then
+                  ready=true
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$ready" != true ]; then
+                echo "Windmill did not become ready within 10 minutes" >&2
+                exit 1
+              fi
+
+              login() {
+                password="$1"
+                curl -fsS -X POST "$api/auth/login" \
+                  -H 'Content-Type: application/json' \
+                  --data "{\"email\":\"admin@windmill.dev\",\"password\":\"$password\"}"
+              }
+
+              token=""
+              if token=$(login "$WINDMILL_ADMIN_PASSWORD" 2>/dev/null); then
+                echo "Windmill bootstrap account is already protected"
+              elif token=$(login changeme 2>/dev/null); then
+                echo "Replacing the documented Windmill bootstrap password..."
+                curl -fsS -X POST "$api/users/setpassword" \
+                  -H "Authorization: Bearer $token" \
+                  -H 'Content-Type: application/json' \
+                  --data "{\"password\":\"$WINDMILL_ADMIN_PASSWORD\"}" >/dev/null
+                token=$(login "$WINDMILL_ADMIN_PASSWORD")
+                echo "Windmill bootstrap account protected"
+              else
+                echo "The default Windmill account is no longer active; leaving the initialized instance unchanged"
+                exit 0
+              fi
+
+              if curl -fsS "$api/workspaces/list" -H "Authorization: Bearer $token" | \
+                 grep -Eq "\"id\"[[:space:]]*:[[:space:]]*\"$WINDMILL_WORKSPACE_ID\""; then
+                echo "Windmill workspace $WINDMILL_WORKSPACE_ID already exists"
+              else
+                echo "Creating Windmill workspace $WINDMILL_WORKSPACE_ID..."
+                curl -fsS -X POST "$api/workspaces/create" \
+                  -H "Authorization: Bearer $token" \
+                  -H 'Content-Type: application/json' \
+                  --data "{\"id\":\"$WINDMILL_WORKSPACE_ID\",\"name\":\"$WINDMILL_WORKSPACE_NAME\"}" >/dev/null
+                echo "Windmill workspace created"
+              fi
+          env:
+            - name: WINDMILL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: windmill-admin-password
+            - name: WINDMILL_WORKSPACE_ID
+              value: {{ .Values.workflowengine.workspaceId | quote }}
+            - name: WINDMILL_WORKSPACE_NAME
+              value: {{ .Values.workflowengine.workspaceName | quote }}
+{{- end }}

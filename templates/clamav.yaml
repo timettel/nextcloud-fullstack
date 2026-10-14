@@ -1,0 +1,83 @@
+{{- if .Values.clamav.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-clamav
+  labels:
+    app.kubernetes.io/component: clamav
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: clamav
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: clamd
+      port: 3310
+      targetPort: clamd
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-clamav
+  labels:
+    app.kubernetes.io/component: clamav
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: clamav
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: clamav
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: clamav
+          image: "{{ .Values.clamav.image.repository }}:{{ .Values.clamav.image.tag }}"
+          imagePullPolicy: {{ .Values.clamav.image.pullPolicy }}
+          env:
+            - name: CLAMD_CONF_StreamMaxLength
+              value: {{ .Values.clamav.streamMaxLength | quote }}
+            - name: CLAMD_CONF_MaxScanSize
+              value: {{ .Values.clamav.streamMaxLength | quote }}
+            - name: CLAMD_CONF_MaxFileSize
+              value: {{ .Values.clamav.streamMaxLength | quote }}
+            - name: CLAMD_CONF_PCREMaxFileSize
+              value: {{ .Values.clamav.streamMaxLength | quote }}
+            - name: CLAMD_CONF_ReadTimeout
+              value: "600"
+            - name: CLAMD_CONF_ConcurrentDatabaseReload
+              value: "no"
+            - name: CLAMD_CONF_MaxThreads
+              value: "2"
+          ports:
+            - name: clamd
+              containerPort: 3310
+          startupProbe:
+            tcpSocket:
+              port: clamd
+            failureThreshold: 360
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: clamd
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: clamd
+            periodSeconds: 30
+          volumeMounts:
+            - name: signatures
+              mountPath: /var/lib/clamav
+          resources:
+            {{- toYaml .Values.clamav.resources | nindent 12 }}
+      volumes:
+        - name: signatures
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-clamav
+{{- end }}

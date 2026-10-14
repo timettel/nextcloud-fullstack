@@ -1,0 +1,73 @@
+{{- if not (has .Values.deploymentProfile (list "test" "prod")) }}
+{{- fail "Select exactly one environment profile with -f values-test.yaml or -f values-prod.yaml" }}
+{{- end }}
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-mariadb
+  labels:
+    app.kubernetes.io/component: mariadb
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+  imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
+  replicas: {{ .Values.mariadb.replicas }}
+  rootPasswordSecretKeyRef:
+    name: {{ include "nextcloud-stack.fullname" . }}
+    key: mariadb-root-password
+  database: {{ .Values.mariadb.database | quote }}
+  username: {{ .Values.mariadb.username | quote }}
+  passwordSecretKeyRef:
+    name: {{ include "nextcloud-stack.fullname" . }}
+    key: mariadb-password
+  cleanupPolicy: Skip
+  storage:
+    size: {{ .Values.mariadb.storage }}
+  galera:
+    enabled: true
+    sst: mariabackup
+    replicaThreads: {{ .Values.mariadb.galera.replicaThreads }}
+    recovery:
+      enabled: true
+  myCnf: |
+    [mariadb]
+    bind-address=*
+    default_storage_engine=InnoDB
+    binlog_format=row
+    innodb_autoinc_lock_mode=2
+    transaction-isolation=READ-COMMITTED
+    innodb_file_per_table=1
+    max_allowed_packet=1G
+    innodb_buffer_pool_size={{ .Values.mariadb.innodbBufferPoolSize }}
+    innodb_log_file_size={{ .Values.mariadb.innodbLogFileSize }}
+    table_open_cache={{ .Values.mariadb.tableOpenCache }}
+    table_definition_cache={{ .Values.mariadb.tableDefinitionCache }}
+    character_set_server={{ .Values.mariadb.characterSet }}
+    collation_server={{ .Values.mariadb.collation }}
+    slow_query_log={{ ternary "ON" "OFF" .Values.mariadb.slowQueryLog.enabled }}
+    slow_query_log_file={{ .Values.mariadb.slowQueryLog.file }}
+    long_query_time={{ .Values.mariadb.slowQueryLog.longQueryTime }}
+    log_output=FILE
+  affinity:
+    {{- if eq .Values.deploymentProfile "prod" }}
+    antiAffinityEnabled: true
+    {{- else }}
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/instance
+                  operator: In
+                  values:
+                    - {{ include "nextcloud-stack.fullname" . }}-mariadb
+            topologyKey: {{ .Values.mariadb.scheduling.topologyKey | quote }}
+    {{- end }}
+  podDisruptionBudget:
+    maxUnavailable: 1
+  updateStrategy:
+    type: ReplicasFirstPrimaryLast
+    mariadbAutoUpgradeEnabled: true
+  resources:
+    {{- toYaml .Values.mariadb.resources | nindent 4 }}

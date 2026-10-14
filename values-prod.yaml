@@ -1,0 +1,21 @@
+# Multi-node production profile. Stateful replicas require distinct nodes and
+# Nextcloud uses RWX storage supplied by the cluster.
+deploymentProfile: prod
+
+nextcloud:
+  persistence:
+    accessMode: ReadWriteMany
+  scheduling:
+    antiAffinity: required
+
+redis:
+  scheduling:
+    antiAffinity: required
+
+mariadb:
+  scheduling: {}
+
+fulltextsearch:
+  elasticsearch:
+    scheduling:
+      antiAffinity: required

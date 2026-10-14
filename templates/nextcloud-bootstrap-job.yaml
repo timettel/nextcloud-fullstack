@@ -1,0 +1,964 @@
+{{- $generatedSkeletonTag := .Files.Get "nc-skeleton/.image-tag" | trim -}}
+{{- $skeletonTag := default $generatedSkeletonTag .Values.nextcloud.skeleton.image.tag -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-bootstrap
+  labels:
+    app.kubernetes.io/component: nextcloud-bootstrap
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  # Expensive mimetype migrations can take a while on existing installations.
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: nextcloud-bootstrap
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      {{- if .Values.nextcloud.skeleton.enabled }}
+      initContainers:
+        - name: stage-nextcloud-skeleton
+          image: "{{ .Values.nextcloud.skeleton.image.repository }}:{{ required "nextcloud.skeleton.image.tag or nc-skeleton/.image-tag is required" $skeletonTag }}"
+          imagePullPolicy: {{ .Values.nextcloud.skeleton.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - cp -a /skeleton/. /export/
+          volumeMounts:
+            - name: nextcloud-skeleton
+              mountPath: /export
+      {{- end }}
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.nextcloud.image.repository }}:{{ .Values.nextcloud.image.tag }}"
+          imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              cd /var/www/html
+
+              echo "Waiting for Nextcloud to finish its initial installation..."
+              ready=false
+              for attempt in $(seq 1 120); do
+                if php occ status --output=json 2>/dev/null | grep -q '"installed":true'; then
+                  ready=true
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$ready" != true ]; then
+                echo "Nextcloud did not become ready within 10 minutes" >&2
+                exit 1
+              fi
+
+              if [ "$NEXTCLOUD_SKELETON_ENABLED" = true ]; then
+                echo "Synchronizing the managed Nextcloud skeleton..."
+                skeleton_target=/var/www/html/core/skeleton
+                skeleton_staging="$(mktemp -d)"
+                trap 'rm -rf "$skeleton_staging"' EXIT
+                skeleton_size_kib="$(du -sk /opt/nextcloud-skeleton | awk '{print $1}')"
+                skeleton_max_kib=$((NEXTCLOUD_SKELETON_MAX_SIZE_MIB * 1024))
+                if [ "$skeleton_size_kib" -gt "$skeleton_max_kib" ]; then
+                  echo "Managed skeleton is ${skeleton_size_kib} KiB; limit is ${skeleton_max_kib} KiB" >&2
+                  exit 1
+                fi
+                find /opt/nextcloud-skeleton -mindepth 1 -maxdepth 1 \
+                  ! -name .gitkeep -exec cp -a '{}' "$skeleton_staging/" ';'
+                rm -rf "$skeleton_target"
+                mkdir -p "$skeleton_target"
+                cp -a "$skeleton_staging/." "$skeleton_target/"
+                rm -rf "$skeleton_staging"
+                trap - EXIT
+                echo "Managed Nextcloud skeleton synchronized"
+              fi
+
+              php occ config:system:set trusted_domains 2 --value="$NEXTCLOUD_INTERNAL_HOST"
+              proxy_index=0
+              for proxy in $TRUSTED_PROXIES; do
+                php occ config:system:set trusted_proxies "$proxy_index" --value="$proxy"
+                proxy_index=$((proxy_index + 1))
+              done
+
+              echo "Applying Nextcloud system defaults..."
+              php occ config:system:set default_language --value="$DEFAULT_LANGUAGE"
+              php occ config:system:set default_locale --value="$DEFAULT_LOCALE"
+              php occ config:system:set default_phone_region --value="$DEFAULT_PHONE_REGION"
+              php occ config:system:set default_timezone --value="$DEFAULT_TIMEZONE"
+              php occ config:system:set maintenance_window_start --type=integer --value="$MAINTENANCE_WINDOW_START"
+              php occ config:system:set serverid --type=integer --value="$SERVER_ID"
+              php occ config:system:set mysql.utf8mb4 --type=boolean --value=true
+              php occ config:system:set overwrite.cli.url --value="$NEXTCLOUD_URL"
+              php occ config:system:set htaccess.RewriteBase --value=/
+              php occ maintenance:update:htaccess
+
+              install_app() {
+                app="$1"
+                if ! php occ app:getpath "$app" >/dev/null 2>&1; then
+                  echo "Installing Nextcloud app: $app"
+                  installed=false
+                  for attempt in 1 2 3; do
+                    if php occ app:install "$app" --no-interaction; then
+                      installed=true
+                      break
+                    fi
+                    echo "Install attempt $attempt for $app failed; retrying..." >&2
+                    sleep 10
+                  done
+                  if [ "$installed" != true ]; then
+                    echo "Could not install Nextcloud app: $app" >&2
+                    exit 1
+                  fi
+                fi
+                php occ app:enable "$app" --no-interaction
+              }
+
+              for app in $NEXTCLOUD_APPS; do
+                install_app "$app"
+              done
+
+              if [ "$ROUNDCUBE_ENABLED" = true ] && [ "$ROUNDCUBE_MENU_ENABLED" = true ]; then
+                install_app external
+                echo "Adding Roundcube to the Nextcloud app menu..."
+                php -r '
+                  require "/var/www/html/lib/base.php";
+                  $config = \OC::$server->get(\OCP\IAppConfig::class);
+                  $sites = json_decode($config->getValueString("external", "sites", "[]"), true);
+                  if (!is_array($sites)) {
+                    $sites = [];
+                  }
+                  $targetId = null;
+                  foreach ($sites as $id => $site) {
+                    if (($site["name"] ?? "") === getenv("ROUNDCUBE_MENU_NAME")
+                        || ($site["url"] ?? "") === getenv("ROUNDCUBE_URL")) {
+                      $targetId = (int)$id;
+                      break;
+                    }
+                  }
+                  if ($targetId === null) {
+                    $targetId = max(array_merge([0], array_map("intval", array_keys($sites)))) + 1;
+                  }
+                  $sites[$targetId] = [
+                    "id" => $targetId,
+                    "name" => getenv("ROUNDCUBE_MENU_NAME"),
+                    "url" => getenv("ROUNDCUBE_URL"),
+                    "lang" => "",
+                    "type" => "link",
+                    "device" => "",
+                    "icon" => "external.svg",
+                    "groups" => [],
+                    "redirect" => getenv("ROUNDCUBE_MENU_NEW_TAB") === "true",
+                  ];
+                  $config->setValueString("external", "sites", json_encode($sites, JSON_THROW_ON_ERROR));
+                  $config->setValueInt("external", "max_site", max(array_map("intval", array_keys($sites))));
+                '
+
+                if [ "$ROUNDCUBE_MENU_NEW_TAB" = true ]; then
+                  # Nextcloud 35's new app menu ignores the navigation target supplied
+                  # by External Sites. Keep this narrowly scoped compatibility patch
+                  # until core passes item.target to AppMenuItem again.
+                  php -r '
+                    $path = "/var/www/html/dist/core-main.js";
+                    $source = file_get_contents($path);
+                    if ($source === false) {
+                      fwrite(STDERR, "Could not read $path\n");
+                      exit(1);
+                    }
+                    $pattern = "/\"new-tab\":\"app-store\"===([A-Za-z_$][A-Za-z0-9_$]*)\\.id(?!\\|\\|!0===\\1\\.target)/";
+                    $replacement = "\"new-tab\":\"app-store\"===\$1.id||!0===\$1.target";
+                    $patched = preg_replace($pattern, $replacement, $source, 1, $count);
+                    if ($patched === null) {
+                      fwrite(STDERR, "Could not evaluate the Nextcloud app-menu compatibility patch\n");
+                      exit(1);
+                    }
+                    if ($count === 1) {
+                      file_put_contents($path, $patched);
+                      echo "Patched the Nextcloud 35 app menu to honor external new-tab targets\n";
+                    } elseif (preg_match("/\"new-tab\":.*\\.target/", $source)) {
+                      echo "Nextcloud app menu already honors external new-tab targets\n";
+                    } else {
+                      fwrite(STDERR, "Warning: Nextcloud app-menu layout changed; new-tab patch was not applied\n");
+                    }
+                  '
+                  # The core asset URL is immutable for a given app-version set.
+                  # Bump the theming suffix so browsers fetch the patched bundle.
+                  php occ config:app:set theming cachebuster --value="$(date +%s)" >/dev/null
+                fi
+              fi
+
+              if [ "$WORKFLOWENGINE_ENABLED" = true ]; then
+                for app in $WORKFLOWENGINE_APPS; do
+                  install_app "$app"
+                done
+              else
+                # Keep existing app data, but do not leave integrations active
+                # after their external workflow engine has been removed.
+                for app in $WORKFLOWENGINE_APPS; do
+                  if php occ app:getpath "$app" >/dev/null 2>&1; then
+                    php occ app:disable "$app" --no-interaction || true
+                  fi
+                done
+              fi
+
+              if [ "$IDENTITY_DIRECTORY_ENABLED" = true ]; then
+                install_app user_ldap
+
+                echo "Waiting for the LDAP identity directory..."
+                ldap_ready=false
+                for attempt in $(seq 1 120); do
+                  if php -r '$ldap = @ldap_connect(getenv("LDAP_URI") . ":" . getenv("LDAP_PORT")); if (!$ldap) { exit(1); } ldap_set_option($ldap, LDAP_OPT_PROTOCOL_VERSION, 3); if (!@ldap_bind($ldap, getenv("LDAP_BIND_DN"), getenv("LDAP_BIND_PASSWORD"))) { exit(1); }'; then
+                    ldap_ready=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "$ldap_ready" != true ]; then
+                  echo "LDAP did not become ready within 10 minutes" >&2
+                  exit 1
+                fi
+
+                if ! php occ ldap:show-config s01 >/dev/null 2>&1; then
+                  php occ ldap:create-empty-config
+                fi
+                php occ ldap:set-config s01 ldapHost "$LDAP_URI"
+                php occ ldap:set-config s01 ldapPort "$LDAP_PORT"
+                php occ ldap:set-config s01 ldapAgentName "$LDAP_BIND_DN"
+                php occ ldap:set-config s01 ldapAgentPassword "$LDAP_BIND_PASSWORD"
+                php occ ldap:set-config s01 ldapBase "$LDAP_BASE_DN"
+                php occ ldap:set-config s01 ldapBaseUsers "$LDAP_USERS_DN"
+                php occ ldap:set-config s01 ldapBaseGroups "$LDAP_GROUPS_DN"
+                php occ ldap:set-config s01 ldapUserFilter "(&(objectclass=person)(memberOf=cn=$LDAP_USERS_GROUP,$LDAP_GROUPS_DN))"
+                php occ ldap:set-config s01 ldapUserFilterMode 1
+                php occ ldap:set-config s01 ldapUserFilterObjectclass person
+                php occ ldap:set-config s01 ldapLoginFilter "(&(objectclass=person)(memberOf=cn=$LDAP_USERS_GROUP,$LDAP_GROUPS_DN)(|(uid=%uid)(mail=%uid)))"
+                php occ ldap:set-config s01 ldapLoginFilterMode 1
+                php occ ldap:set-config s01 ldapLoginFilterUsername 1
+                php occ ldap:set-config s01 ldapLoginFilterEmail 1
+                php occ ldap:set-config s01 ldapGroupFilter "(&(objectclass=groupOfUniqueNames)(cn=nc-*))"
+                php occ ldap:set-config s01 ldapGroupFilterMode 1
+                php occ ldap:set-config s01 ldapGroupFilterObjectclass groupOfUniqueNames
+                php occ ldap:set-config s01 ldapGroupMemberAssocAttr uniqueMember
+                php occ ldap:set-config s01 ldapGroupDisplayName cn
+                php occ ldap:set-config s01 ldapUserDisplayName displayname
+                php occ ldap:set-config s01 ldapEmailAttribute mail
+                php occ ldap:set-config s01 ldapExpertUsernameAttr uid
+                # Keep LDAP values uncached until dependent app provisioning has
+                # consumed the current directory attributes below.
+                php occ ldap:set-config s01 ldapCacheTTL 0
+                php occ ldap:set-config s01 ldapPagingSize 500
+                php occ ldap:set-config s01 ldapTLS 0
+                php occ ldap:set-config s01 ldapNestedGroups 0
+                php occ ldap:set-config s01 turnOnPasswordChange 1
+                php occ ldap:set-config s01 ldapConfigurationActive 1
+                php occ ldap:promote-group --yes "$LDAP_ADMINS_GROUP"
+                echo "Nextcloud LDAP authentication configured"
+              elif php occ app:getpath user_ldap >/dev/null 2>&1; then
+                php occ app:disable user_ldap --no-interaction || true
+              fi
+
+              if [ "$HIDE_NEXTCLOUD_USER_CREATION" = true ]; then
+                install_app theming_customcss
+              fi
+              if php occ app:getpath theming_customcss >/dev/null 2>&1; then
+                # Only manage our marked block so manually configured CSS survives.
+                php -r '
+                  require "/var/www/html/lib/base.php";
+                  $config = \OC::$server->get(\OCP\IAppConfig::class);
+                  $css = $config->getValueString("theming_customcss", "customcss", "");
+                  $pattern = "~\\n?/\\* nextcloud-stack:ldap-only-users:start \\*/.*?/\\* nextcloud-stack:ldap-only-users:end \\*/\\n?~s";
+                  $css = trim((string)preg_replace($pattern, "\n", $css));
+                  if (getenv("HIDE_NEXTCLOUD_USER_CREATION") === "true") {
+                    $block = "/* nextcloud-stack:ldap-only-users:start */\n"
+                      . "#new-user-button { display: none !important; }\n"
+                      . "/* nextcloud-stack:ldap-only-users:end */";
+                    $css .= ($css === "" ? "" : "\n\n") . $block;
+                  }
+                  $config->setValueString("theming_customcss", "customcss", $css);
+                '
+                php occ config:app:set theming cachebuster --value="$(date +%s)" >/dev/null
+              fi
+
+              if [ "$MAIL_ENABLED" = true ]; then
+                install_app mail
+                echo "Configuring centrally provisioned Nextcloud Mail accounts..."
+                php -r '
+                  require "/var/www/html/lib/base.php";
+                  \OC_App::loadApp("mail");
+                  $manager = \OC::$server->query(\OCA\Mail\Service\Provisioning\Manager::class);
+                  $data = [
+                    "provisioningDomain" => "*",
+                    "emailTemplate" => "%LDAP:mail%",
+                    "imapUser" => "%LDAP:mail%",
+                    "imapHost" => getenv("MAIL_HOST"),
+                    "imapPort" => (int)getenv("MAIL_IMAP_PORT"),
+                    "imapSslMode" => getenv("MAIL_IMAP_SSL_MODE"),
+                    "smtpUser" => "%LDAP:mail%",
+                    "smtpHost" => getenv("MAIL_HOST"),
+                    "smtpPort" => (int)getenv("MAIL_SMTP_PORT"),
+                    "smtpSslMode" => getenv("MAIL_SMTP_SSL_MODE"),
+                    "masterPasswordEnabled" => true,
+                    "masterPassword" => getenv("MAIL_MASTER_PASSWORD"),
+                    "masterUser" => "*" . getenv("MAIL_MASTER_USER"),
+                    "sieveEnabled" => false,
+                    "sieveHost" => "",
+                    "sievePort" => null,
+                    "sieveSslMode" => "",
+                    "sieveUser" => "",
+                    "ldapAliasesProvisioning" => false,
+                    "ldapAliasesAttribute" => "",
+                  ];
+                  $existing = null;
+                  foreach ($manager->getConfigs() as $config) {
+                    if ($config->getProvisioningDomain() === $data["provisioningDomain"]
+                        || $config->getProvisioningDomain() === getenv("MAIL_DOMAIN")) {
+                      $existing = $config;
+                      break;
+                    }
+                  }
+                  if ($existing === null) {
+                    $manager->newProvisioning($data);
+                  } else {
+                    $data["id"] = $existing->getId();
+                    $manager->updateProvisioning($data);
+                  }
+                  printf("Provisioned %d Nextcloud Mail account(s).\n", $manager->provision());
+
+                  // OIDC sessions never contain the LDAP password. Persist the
+                  // dedicated master credential for every centrally provisioned
+                  // account so CLI jobs and first-time users work immediately.
+                  $accountMapper = \OC::$server->query(\OCA\Mail\Db\MailAccountMapper::class);
+                  $crypto = \OC::$server->query(\OCP\Security\ICrypto::class);
+                  $encryptedPassword = $crypto->encrypt(getenv("MAIL_MASTER_PASSWORD"));
+                  $updated = 0;
+                  foreach ($accountMapper->getAllAccounts() as $account) {
+                    if ($account->getProvisioningId() === null) {
+                      continue;
+                    }
+                    $account->setInboundPassword($encryptedPassword);
+                    $account->setOutboundPassword($encryptedPassword);
+                    $accountMapper->save($account);
+                    $updated++;
+                  }
+                  printf("Updated credentials for %d provisioned Mail account(s).\n", $updated);
+                '
+                echo "Nextcloud Mail is connected to $MAIL_HOST"
+              elif php occ app:getpath mail >/dev/null 2>&1; then
+                php occ app:disable mail --no-interaction || true
+              fi
+
+              if [ "$MAIL_SERVER_ENABLED" = true ]; then
+                echo "Configuring authenticated Nextcloud system mail..."
+                php occ config:system:set mail_smtpmode --value=smtp
+                php occ config:system:set mail_smtphost --value="$MAIL_HOST"
+                php occ config:system:set mail_smtpport --type=integer --value=587
+                php occ config:system:set mail_smtpsecure --value=tls
+                php occ config:system:set mail_smtpauth --type=boolean --value=true
+                php occ config:system:set mail_smtpname --value="$MAIL_SERVICE_EMAIL"
+                php occ config:system:set mail_smtppassword --value="$MAIL_SERVICE_PASSWORD"
+                php occ config:system:set mail_from_address --value="$MAIL_SERVICE_USERNAME"
+                php occ config:system:set mail_domain --value="$MAIL_DOMAIN"
+                echo "Nextcloud system mail is connected to $MAIL_HOST:587"
+              fi
+
+              if [ "$IDENTITY_DIRECTORY_ENABLED" = true ]; then
+                php occ ldap:set-config s01 ldapCacheTTL 600
+              fi
+
+              if [ "$KEYCLOAK_ENABLED" = true ]; then
+                for app in $KEYCLOAK_APPS; do
+                  install_app "$app"
+                done
+
+                echo "Waiting for Keycloak OpenID discovery..."
+                keycloak_ready=false
+                for attempt in $(seq 1 180); do
+                  if curl -fsS --max-time 5 "$KEYCLOAK_DISCOVERY_URL" >/dev/null; then
+                    keycloak_ready=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "$keycloak_ready" != true ]; then
+                  echo "Keycloak did not become ready within 15 minutes" >&2
+                  exit 1
+                fi
+
+                php occ user_oidc:provider "$KEYCLOAK_PROVIDER_IDENTIFIER" \
+                  --clientid="$KEYCLOAK_CLIENT_ID" \
+                  --clientsecret-env=KEYCLOAK_CLIENT_SECRET \
+                  --discoveryuri="$KEYCLOAK_DISCOVERY_URL" \
+                  --endsessionendpointuri="$KEYCLOAK_END_SESSION_URL" \
+                  --postlogouturi="$NEXTCLOUD_URL" \
+                  --scope="openid email profile" \
+                  --unique-uid=0 \
+                  --check-bearer=0 \
+                  --bearer-provisioning=0 \
+                  --send-id-token-hint=1 \
+                  --mapping-uid=preferred_username \
+                  --mapping-display-name=name \
+                  --mapping-email=email \
+                  --mapping-groups="$KEYCLOAK_GROUP_CLAIM" \
+                  --group-provisioning=1 \
+                  --group-whitelist-regex="$KEYCLOAK_GROUP_WHITELIST_REGEX" \
+                  --group-restrict-login-to-whitelist="$KEYCLOAK_RESTRICT_LOGIN" \
+                  --no-interaction
+                php occ config:system:set user_oidc auto_provision --type=boolean --value=true
+                php occ config:system:set user_oidc soft_auto_provision --type=boolean --value=true
+                php occ config:system:set user_oidc login_label --value="Anmelden mit Keycloak"
+                php occ config:app:set user_oidc allow_multiple_user_backends --type=string --value=0
+                echo "Nextcloud OpenID Connect is connected to Keycloak and is the primary browser login"
+              else
+                for app in $KEYCLOAK_APPS; do
+                  if php occ app:getpath "$app" >/dev/null 2>&1; then
+                    php occ app:disable "$app" --no-interaction || true
+                  fi
+                done
+              fi
+
+              if [ "$WHITEBOARD_ENABLED" = true ]; then
+                install_app whiteboard
+                php occ config:app:set whiteboard collabBackendUrl --value="$WHITEBOARD_URL"
+                php occ config:app:set whiteboard jwt_secret_key --type=string --value="$WHITEBOARD_JWT_SECRET" --sensitive --no-interaction
+                echo "Nextcloud Whiteboard is connected to its collaboration backend"
+              elif php occ app:getpath whiteboard >/dev/null 2>&1; then
+                php occ app:disable whiteboard --no-interaction || true
+              fi
+
+              if [ "$FULLTEXTSEARCH_ENABLED" = true ]; then
+                install_app fulltextsearch
+                install_app fulltextsearch_elasticsearch
+                install_app files_fulltextsearch
+
+                echo "Waiting for the Elasticsearch cluster..."
+                elastic_ready=false
+                for attempt in $(seq 1 180); do
+                  if curl -fsS -u "elastic:$ELASTIC_PASSWORD" \
+                    "$ELASTIC_URL/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; then
+                    elastic_ready=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "$elastic_ready" != true ]; then
+                  echo "Elasticsearch did not become ready within 15 minutes" >&2
+                  exit 1
+                fi
+
+                elastic_index_existed=false
+                if curl -fsS -u "elastic:$ELASTIC_PASSWORD" \
+                  "$ELASTIC_URL/$ELASTIC_INDEX" >/dev/null 2>&1; then
+                  elastic_index_existed=true
+                fi
+
+                elastic_host="http://elastic:$ELASTIC_PASSWORD@$ELASTIC_SERVICE:9200"
+                php occ fulltextsearch:configure \
+                  '{"search_platform":"OCA\\FullTextSearch_Elasticsearch\\Platform\\ElasticSearchPlatform"}'
+                php occ fulltextsearch_elasticsearch:configure \
+                  "{\"elastic_host\":\"$elastic_host\",\"elastic_index\":\"$ELASTIC_INDEX\"}"
+                php occ files_fulltextsearch:configure \
+                  "{\"files_local\":$FULLTEXT_FILES_LOCAL,\"files_external\":$FULLTEXT_FILES_EXTERNAL,\"files_group_folders\":$FULLTEXT_FILES_GROUP_FOLDERS,\"files_size\":$FULLTEXT_FILES_MAX_SIZE_MB,\"files_office\":$FULLTEXT_FILES_OFFICE,\"files_pdf\":$FULLTEXT_FILES_PDF,\"files_zip\":$FULLTEXT_FILES_ZIP}"
+
+                if [ ! -f data/fts-index.done ] || [ "$elastic_index_existed" != true ]; then
+                  # A missing Elasticsearch index with a surviving Nextcloud PVC
+                  # requires the live runner to release its lock before rebuilding.
+                  rm -f data/fts-index.done
+                  php occ fulltextsearch:stop || true
+                  sleep 5
+                  php occ fulltextsearch:test
+                  echo "Building the initial full-text index..."
+                  php occ fulltextsearch:index '{"errors":"reset"}' --no-readline
+                  touch data/fts-index.done
+                fi
+                echo "Nextcloud full-text search is connected to Elasticsearch"
+              fi
+
+              if [ "$NOTIFY_PUSH_ENABLED" = true ]; then
+                install_app notify_push
+              fi
+
+              if [ "$APPAPI_ENABLED" = true ]; then
+                install_app app_api
+                echo "Waiting for AppAPI HaRP..."
+                harp_ready=false
+                for attempt in $(seq 1 120); do
+                  if curl -fsS -H "harp-shared-key: $HARP_SHARED_KEY" \
+                    "http://$HARP_HOST:$HARP_PORT/exapps/app_api/info" >/dev/null; then
+                    harp_ready=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "$harp_ready" != true ]; then
+                  echo "AppAPI HaRP did not become ready within 10 minutes" >&2
+                  exit 1
+                fi
+
+                if ! php occ app_api:daemon:list --output=plain | grep -Fq "$APPAPI_DAEMON_NAME"; then
+                  echo "Registering the Kubernetes HaRP deploy daemon..."
+                  php occ app_api:daemon:register \
+                    "$APPAPI_DAEMON_NAME" "$APPAPI_DISPLAY_NAME" \
+                    kubernetes-install http "$HARP_HOST:$HARP_PORT" "$NEXTCLOUD_URL" \
+                    --harp --harp_shared_key "$HARP_SHARED_KEY" --k8s \
+                    --k8s_expose_type "$APPAPI_EXPOSE_TYPE" --set-default \
+                    --compute_device=cpu --no-interaction
+                fi
+                php occ config:app:set app_api default_daemon_config --value="$APPAPI_DAEMON_NAME"
+                echo "Nextcloud AppAPI is connected to Kubernetes HaRP"
+              fi
+
+              if [ "$CLAMAV_ENABLED" = true ]; then
+                install_app files_antivirus
+                echo "Waiting for ClamAV..."
+                clamav_ready=false
+                for attempt in $(seq 1 360); do
+                  if php -r '$socket = @fsockopen(getenv("CLAMAV_HOST"), 3310, $errno, $errstr, 2); if (!$socket) { exit(1); } fclose($socket);'; then
+                    clamav_ready=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "$clamav_ready" != true ]; then
+                  echo "ClamAV did not become ready within 30 minutes" >&2
+                  exit 1
+                fi
+                php occ config:app:set files_antivirus av_mode --value=daemon
+                php occ config:app:set files_antivirus av_host --value="$CLAMAV_HOST"
+                php occ config:app:set files_antivirus av_port --value=3310
+                php occ config:app:set files_antivirus av_stream_max_length --value="$CLAMAV_STREAM_MAX_LENGTH"
+                php occ config:app:set files_antivirus av_max_file_size --value=-1
+                php occ config:app:set files_antivirus av_infected_action --value="$CLAMAV_INFECTED_ACTION"
+                echo "Nextcloud Files Antivirus is connected to ClamAV"
+              fi
+
+              if [ "$EUROOFFICE_ENABLED" = true ]; then
+                install_app eurooffice
+                php occ config:app:set eurooffice DocumentServerUrl --value="$EUROOFFICE_URL"
+                php occ config:app:set eurooffice DocumentServerInternalUrl --value="$EUROOFFICE_INTERNAL_URL"
+                php occ config:app:set eurooffice StorageUrl --value="$NEXTCLOUD_URL/"
+                php occ config:app:set eurooffice jwt_header --value="$JWT_HEADER"
+                php occ config:app:set eurooffice jwt_secret --value="$JWT_SECRET" --sensitive
+                php occ config:app:set eurooffice verify_peer_off --value=false
+                php occ config:app:delete eurooffice settings_error || true
+              fi
+
+              if [ "$TALK_ENABLED" = true ]; then
+                install_app spreed
+                php occ config:app:set spreed certificate_expiration_days --type=integer --value=2
+
+                turn_servers=$(php occ talk:turn:list --output=plain)
+                if ! printf '%s\n' "$turn_servers" | grep server | grep -q " $TURN_HOST:$TURN_PORT"; then
+                  php occ talk:turn:add turn "$TURN_HOST:$TURN_PORT" udp --secret="$TURN_SECRET"
+                  php occ talk:turn:add turns "$TURN_HOST:$TURN_PORT" tcp --secret="$TURN_SECRET"
+                fi
+
+                stun_servers=$(php occ talk:stun:list --output=plain)
+                if ! printf '%s\n' "$stun_servers" | grep -q " $TURN_HOST:$TURN_PORT"; then
+                  php occ talk:stun:add "$TURN_HOST:$TURN_PORT"
+                fi
+                php occ talk:stun:delete stun.nextcloud.com:443 || true
+
+                if ! php occ talk:signaling:list --output=plain | grep -q "$TALK_SIGNALING_URL"; then
+                  echo "Connecting Nextcloud Talk to the High Performance Backend..."
+                  signaling_ready=false
+                  for attempt in $(seq 1 120); do
+                    if php occ talk:signaling:add "$TALK_SIGNALING_URL" "$TALK_SIGNALING_SECRET" --verify; then
+                      signaling_ready=true
+                      break
+                    fi
+                    sleep 5
+                  done
+                  if [ "$signaling_ready" != true ]; then
+                    echo "Talk HPB connection check failed for 10 minutes" >&2
+                    exit 1
+                  fi
+                fi
+
+                if [ "$TALK_RECORDING_ENABLED" = true ]; then
+                  echo "Connecting Nextcloud Talk to the recording backend..."
+                  recording_ready=false
+                  for attempt in $(seq 1 120); do
+                    if php -r '$socket = @fsockopen(getenv("TALK_RECORDING_INTERNAL_HOST"), 1234, $errno, $errstr, 2); if (!$socket) { exit(1); } fclose($socket);'; then
+                      recording_ready=true
+                      break
+                    fi
+                    sleep 5
+                  done
+                  if [ "$recording_ready" != true ]; then
+                    echo "Talk recording backend did not become ready within 10 minutes" >&2
+                    exit 1
+                  fi
+
+                  recording_servers="{\"servers\":[{\"server\":\"$TALK_RECORDING_URL\",\"verify\":true}],\"secret\":\"$TALK_RECORDING_SECRET\"}"
+                  php occ config:app:set spreed recording_servers --value="$recording_servers" >/dev/null
+                  echo "Nextcloud Talk is connected to the recording backend"
+                fi
+              fi
+
+              php occ background:cron
+
+              if [ "$NOTIFY_PUSH_ENABLED" = true ]; then
+                echo "Checking the complete notify_push connection..."
+                push_ready=false
+                for attempt in $(seq 1 120); do
+                  if php occ notify_push:setup "$NEXTCLOUD_URL/push"; then
+                    push_ready=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "$push_ready" != true ]; then
+                  echo "notify_push setup failed for 10 minutes" >&2
+                  exit 1
+                fi
+                php occ notify_push:self-test
+              fi
+
+              if [ "$EUROOFFICE_ENABLED" = true ]; then
+                echo "Checking the complete Nextcloud/EuroOffice connection..."
+                office_ready=false
+                for attempt in $(seq 1 60); do
+                  if php occ eurooffice:documentserver --check; then
+                    office_ready=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "$office_ready" != true ]; then
+                  echo "EuroOffice connection check failed for 5 minutes" >&2
+                  exit 1
+                fi
+              fi
+
+              if [ "$ADD_MISSING_INDICES" = true ]; then
+                echo "Adding optional database indices..."
+                php occ db:add-missing-indices
+              fi
+
+              if [ "$CONVERT_MYSQL_CHARSET" = true ]; then
+                echo "Converting the Nextcloud database to utf8mb4 where needed..."
+                php occ db:convert-mysql-charset
+              fi
+
+              if [ "$RUN_EXPENSIVE_REPAIRS" = true ]; then
+                echo "Running expensive repair and mimetype migration steps..."
+                php occ maintenance:repair --include-expensive
+              fi
+
+              for app in $NEXTCLOUD_DISABLED_APPS; do
+                if php occ app:getpath "$app" >/dev/null 2>&1; then
+                  echo "Disabling Nextcloud app: $app"
+                  php occ app:disable "$app" --no-interaction
+                else
+                  echo "Nextcloud app is not installed, skipping disable: $app"
+                fi
+              done
+
+              echo "Nextcloud setup checks:"
+              php occ setupchecks || true
+
+              echo "Nextcloud bootstrap completed"
+          env:
+            - name: NEXTCLOUD_APPS
+              value: {{ join " " .Values.nextcloud.apps | quote }}
+            - name: NEXTCLOUD_DISABLED_APPS
+              value: {{ join " " .Values.nextcloud.disabledApps | quote }}
+            - name: NEXTCLOUD_SKELETON_ENABLED
+              value: {{ .Values.nextcloud.skeleton.enabled | quote }}
+            - name: NEXTCLOUD_SKELETON_MAX_SIZE_MIB
+              value: {{ .Values.nextcloud.skeleton.maxSizeMiB | quote }}
+            - name: WORKFLOWENGINE_ENABLED
+              value: {{ .Values.workflowengine.enabled | quote }}
+            - name: WORKFLOWENGINE_APPS
+              value: {{ join " " .Values.workflowengine.nextcloudApps | quote }}
+            - name: KEYCLOAK_ENABLED
+              value: {{ .Values.keycloak.enabled | quote }}
+            - name: KEYCLOAK_APPS
+              value: "user_oidc"
+            {{- if .Values.keycloak.enabled }}
+            - name: KEYCLOAK_CLIENT_ID
+              value: {{ .Values.keycloak.clientId | quote }}
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: keycloak-client-secret
+            - name: KEYCLOAK_PROVIDER_IDENTIFIER
+              value: {{ .Values.keycloak.providerIdentifier | quote }}
+            - name: KEYCLOAK_DISCOVERY_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "keycloak")) }}/realms/{{ .Values.keycloak.realm }}/.well-known/openid-configuration"
+            - name: KEYCLOAK_END_SESSION_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "keycloak")) }}/realms/{{ .Values.keycloak.realm }}/protocol/openid-connect/logout"
+            - name: KEYCLOAK_GROUP_CLAIM
+              value: {{ .Values.keycloak.groupClaim | quote }}
+            - name: KEYCLOAK_GROUP_WHITELIST_REGEX
+              value: {{ .Values.keycloak.groupWhitelistRegex | quote }}
+            - name: KEYCLOAK_RESTRICT_LOGIN
+              value: {{ ternary "1" "0" .Values.keycloak.restrictLoginToGroups | quote }}
+            {{- end }}
+            - name: IDENTITY_DIRECTORY_ENABLED
+              value: {{ .Values.identityDirectory.enabled | quote }}
+            - name: HIDE_NEXTCLOUD_USER_CREATION
+              value: {{ and .Values.identityDirectory.enabled .Values.identityDirectory.hideNextcloudUserCreation | quote }}
+            {{- if .Values.identityDirectory.enabled }}
+            - name: LDAP_HOST
+              value: {{ printf "%s-lldap" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: LDAP_URI
+              value: {{ printf "ldaps://%s-lldap" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: LDAP_PORT
+              value: "6360"
+            - name: LDAP_BASE_DN
+              value: {{ (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_USERS_DN
+              value: {{ printf "ou=people,%s" (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_GROUPS_DN
+              value: {{ printf "ou=groups,%s" (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_BIND_DN
+              value: {{ printf "uid=%s,ou=people,%s" .Values.identityDirectory.bindAccount.username (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+            - name: LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: ldap-bind-password
+            - name: LDAP_USERS_GROUP
+              value: {{ .Values.identityDirectory.nextcloudUsersGroup | quote }}
+            - name: LDAP_ADMINS_GROUP
+              value: {{ .Values.identityDirectory.nextcloudAdminsGroup | quote }}
+            {{- end }}
+            - name: NEXTCLOUD_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}"
+            - name: ROUNDCUBE_ENABLED
+              value: {{ .Values.roundcube.enabled | quote }}
+            - name: ROUNDCUBE_MENU_ENABLED
+              value: {{ and .Values.roundcube.enabled .Values.roundcube.nextcloudMenu.enabled | quote }}
+            {{- if .Values.roundcube.enabled }}
+            - name: ROUNDCUBE_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "webmail")) }}/"
+            - name: ROUNDCUBE_MENU_NAME
+              value: {{ .Values.roundcube.nextcloudMenu.name | quote }}
+            - name: ROUNDCUBE_MENU_NEW_TAB
+              value: {{ .Values.roundcube.nextcloudMenu.openInNewTab | quote }}
+            {{- end }}
+            - name: MAIL_ENABLED
+              value: {{ and .Values.mail.enabled .Values.mail.nextcloud.installApp | quote }}
+            - name: MAIL_SERVER_ENABLED
+              value: {{ .Values.mail.enabled | quote }}
+            {{- if .Values.mail.enabled }}
+            - name: MAIL_DOMAIN
+              value: {{ (include "nextcloud-stack.domain" .) | quote }}
+            - name: MAIL_HOST
+              value: {{ (include "nextcloud-stack.host" (list . "mail")) | quote }}
+            - name: MAIL_IMAP_PORT
+              value: {{ .Values.mail.nextcloud.imapPort | quote }}
+            - name: MAIL_IMAP_SSL_MODE
+              value: {{ .Values.mail.nextcloud.imapSslMode | quote }}
+            - name: MAIL_SMTP_PORT
+              value: {{ .Values.mail.nextcloud.smtpPort | quote }}
+            - name: MAIL_SMTP_SSL_MODE
+              value: {{ .Values.mail.nextcloud.smtpSslMode | quote }}
+            - name: MAIL_SERVICE_USERNAME
+              value: {{ .Values.mail.serviceAccount.username | quote }}
+            - name: MAIL_SERVICE_EMAIL
+              value: {{ printf "%s@%s" .Values.mail.serviceAccount.username (include "nextcloud-stack.domain" .) | quote }}
+            - name: MAIL_SERVICE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: mail-service-password
+            - name: MAIL_MASTER_USER
+              value: {{ .Values.mail.nextcloud.masterUser | quote }}
+            - name: MAIL_MASTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: nextcloud-mail-master-password
+            {{- end }}
+            - name: WHITEBOARD_ENABLED
+              value: {{ .Values.whiteboard.enabled | quote }}
+            {{- if .Values.whiteboard.enabled }}
+            - name: WHITEBOARD_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "nextcloud")) }}{{ .Values.whiteboard.path }}"
+            - name: WHITEBOARD_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: whiteboard-jwt-secret
+            {{- end }}
+            - name: NEXTCLOUD_INTERNAL_HOST
+              value: {{ printf "%s-nextcloud" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: TRUSTED_PROXIES
+              value: {{ join " " .Values.nextcloud.trustedProxies | quote }}
+            - name: DEFAULT_LANGUAGE
+              value: {{ .Values.nextcloud.systemConfig.defaultLanguage | quote }}
+            - name: DEFAULT_LOCALE
+              value: {{ .Values.nextcloud.systemConfig.defaultLocale | quote }}
+            - name: DEFAULT_PHONE_REGION
+              value: {{ .Values.nextcloud.systemConfig.defaultPhoneRegion | quote }}
+            - name: DEFAULT_TIMEZONE
+              value: {{ .Values.nextcloud.systemConfig.defaultTimezone | quote }}
+            - name: MAINTENANCE_WINDOW_START
+              value: {{ .Values.nextcloud.systemConfig.maintenanceWindowStart | quote }}
+            - name: SERVER_ID
+              value: {{ .Values.nextcloud.systemConfig.serverId | quote }}
+            - name: ADD_MISSING_INDICES
+              value: {{ .Values.nextcloud.maintenance.addMissingIndices | quote }}
+            - name: CONVERT_MYSQL_CHARSET
+              value: {{ .Values.nextcloud.maintenance.convertMysqlCharset | quote }}
+            - name: RUN_EXPENSIVE_REPAIRS
+              value: {{ .Values.nextcloud.maintenance.runExpensiveRepairs | quote }}
+            - name: EUROOFFICE_ENABLED
+              value: {{ .Values.eurooffice.installApp | quote }}
+            - name: EUROOFFICE_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "office")) }}/"
+            - name: EUROOFFICE_INTERNAL_URL
+              value: "http://{{ include "nextcloud-stack.fullname" . }}-eurooffice/"
+            - name: JWT_HEADER
+              value: {{ default "AuthorizationJWT" .Values.eurooffice.jwtHeader | quote }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: eurooffice-jwt-secret
+            - name: NOTIFY_PUSH_ENABLED
+              value: {{ .Values.notifyPush.enabled | quote }}
+            - name: FULLTEXTSEARCH_ENABLED
+              value: {{ .Values.fulltextsearch.enabled | quote }}
+            {{- if .Values.fulltextsearch.enabled }}
+            - name: ELASTIC_SERVICE
+              value: {{ printf "%s-elasticsearch-es-http" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: ELASTIC_URL
+              value: {{ printf "http://%s-elasticsearch-es-http:9200" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: ELASTIC_INDEX
+              value: {{ .Values.fulltextsearch.elasticsearch.index | quote }}
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}-elasticsearch-es-elastic-user
+                  key: elastic
+            - name: FULLTEXT_FILES_LOCAL
+              value: {{ .Values.fulltextsearch.files.local | quote }}
+            - name: FULLTEXT_FILES_EXTERNAL
+              value: {{ ternary "1" "0" .Values.fulltextsearch.files.external | quote }}
+            - name: FULLTEXT_FILES_GROUP_FOLDERS
+              value: {{ .Values.fulltextsearch.files.groupFolders | quote }}
+            - name: FULLTEXT_FILES_MAX_SIZE_MB
+              value: {{ .Values.fulltextsearch.files.maxSizeMb | quote }}
+            - name: FULLTEXT_FILES_OFFICE
+              value: {{ .Values.fulltextsearch.files.office | quote }}
+            - name: FULLTEXT_FILES_PDF
+              value: {{ .Values.fulltextsearch.files.pdf | quote }}
+            - name: FULLTEXT_FILES_ZIP
+              value: {{ .Values.fulltextsearch.files.zip | quote }}
+            {{- end }}
+            - name: APPAPI_ENABLED
+              value: {{ .Values.appApi.enabled | quote }}
+            - name: APPAPI_DAEMON_NAME
+              value: {{ .Values.appApi.daemonName | quote }}
+            - name: APPAPI_DISPLAY_NAME
+              value: {{ .Values.appApi.displayName | quote }}
+            - name: APPAPI_EXPOSE_TYPE
+              value: {{ .Values.appApi.exposeType | quote }}
+            - name: HARP_HOST
+              value: {{ printf "%s-harp" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: HARP_PORT
+              value: {{ .Values.appApi.servicePort | quote }}
+            {{- if .Values.appApi.enabled }}
+            - name: HARP_SHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: harp-shared-key
+            {{- end }}
+            - name: CLAMAV_ENABLED
+              value: {{ .Values.clamav.enabled | quote }}
+            - name: CLAMAV_HOST
+              value: {{ printf "%s-clamav" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: CLAMAV_STREAM_MAX_LENGTH
+              value: {{ .Values.clamav.streamMaxLengthBytes | quote }}
+            - name: CLAMAV_INFECTED_ACTION
+              value: {{ .Values.clamav.infectedAction | quote }}
+            - name: TALK_ENABLED
+              value: {{ .Values.talk.enabled | quote }}
+            - name: TALK_SIGNALING_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "talk")) }}/standalone-signaling/"
+            - name: TALK_RECORDING_ENABLED
+              value: {{ and .Values.talk.enabled .Values.talk.recording.enabled | quote }}
+            - name: TALK_RECORDING_URL
+              value: "https://{{ (include "nextcloud-stack.host" (list . "recording")) }}/"
+            - name: TALK_RECORDING_INTERNAL_HOST
+              value: {{ printf "%s-talk-recording" (include "nextcloud-stack.fullname" .) | quote }}
+            - name: TURN_HOST
+              value: {{ (include "nextcloud-stack.host" (list . "turn")) | quote }}
+            - name: TURN_PORT
+              value: {{ .Values.talk.turnPort | quote }}
+            - name: TALK_SIGNALING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: talk-signaling-secret
+            - name: TURN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: turn-secret
+            {{- if and .Values.talk.enabled .Values.talk.recording.enabled }}
+            - name: TALK_RECORDING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.fullname" . }}
+                  key: talk-recording-secret
+            {{- end }}
+          volumeMounts:
+            - name: nextcloud
+              mountPath: /var/www/html
+            {{- if .Values.nextcloud.skeleton.enabled }}
+            - name: nextcloud-skeleton
+              mountPath: /opt/nextcloud-skeleton
+              readOnly: true
+            {{- end }}
+            {{- if .Values.identityDirectory.enabled }}
+            - name: ldap-config
+              mountPath: /etc/ldap/ldap.conf
+              subPath: ldap.conf
+              readOnly: true
+            - name: ldap-ca
+              mountPath: /etc/ssl/certs/lldap-ca.crt
+              subPath: ca.crt
+              readOnly: true
+            {{- end }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: nextcloud
+          persistentVolumeClaim:
+            claimName: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+        {{- if .Values.nextcloud.skeleton.enabled }}
+        - name: nextcloud-skeleton
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.identityDirectory.enabled }}
+        - name: ldap-config
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-php
+        - name: ldap-ca
+          secret:
+            secretName: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}

@@ -1,0 +1,75 @@
+{{- if .Values.fulltextsearch.enabled }}
+{{- $antiAffinity := required "fulltextsearch.elasticsearch.scheduling.antiAffinity must be set by values-test.yaml or values-prod.yaml" .Values.fulltextsearch.elasticsearch.scheduling.antiAffinity }}
+{{- if not (has $antiAffinity (list "preferred" "required")) }}
+{{- fail "fulltextsearch.elasticsearch.scheduling.antiAffinity must be preferred or required" }}
+{{- end }}
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-elasticsearch
+  labels:
+    app.kubernetes.io/component: elasticsearch
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  version: {{ .Values.fulltextsearch.elasticsearch.version | quote }}
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true
+  nodeSets:
+    - name: default
+      count: {{ .Values.fulltextsearch.elasticsearch.replicas }}
+      config:
+        node.roles: [master, data, ingest]
+        indices.fielddata.cache.size: 20%
+        indices.memory.index_buffer_size: 20%
+        thread_pool.write.queue_size: 1000
+      podTemplate:
+        metadata:
+          labels:
+            app.kubernetes.io/component: elasticsearch
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          affinity:
+            podAntiAffinity:
+              {{- if eq $antiAffinity "required" }}
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      elasticsearch.k8s.elastic.co/cluster-name: {{ include "nextcloud-stack.fullname" . }}-elasticsearch
+                  topologyKey: {{ .Values.fulltextsearch.elasticsearch.scheduling.topologyKey | quote }}
+              {{- else }}
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        elasticsearch.k8s.elastic.co/cluster-name: {{ include "nextcloud-stack.fullname" . }}-elasticsearch
+                    topologyKey: {{ .Values.fulltextsearch.elasticsearch.scheduling.topologyKey | quote }}
+              {{- end }}
+          {{- if hasPrefix "8." .Values.fulltextsearch.elasticsearch.version }}
+          initContainers:
+            - name: install-plugins
+              command:
+                - sh
+                - -c
+                - |
+                  bin/elasticsearch-plugin list | grep -qx ingest-attachment || \
+                    bin/elasticsearch-plugin install --batch ingest-attachment
+          {{- end }}
+          containers:
+            - name: elasticsearch
+              resources:
+                {{- toYaml .Values.fulltextsearch.elasticsearch.resources | nindent 16 }}
+      volumeClaimTemplates:
+        - metadata:
+            name: elasticsearch-data
+          spec:
+            accessModes: [ReadWriteOnce]
+            {{- with .Values.fulltextsearch.elasticsearch.storageClass }}
+            storageClassName: {{ . | quote }}
+            {{- end }}
+            resources:
+              requests:
+                storage: {{ .Values.fulltextsearch.elasticsearch.storage }}
+{{- end }}

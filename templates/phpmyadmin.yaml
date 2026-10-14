@@ -1,0 +1,221 @@
+{{- if and .Values.phpmyadmin.enabled (not (has .Values.phpmyadmin.auth.mode (list "keycloak" "database"))) }}
+{{- fail "phpmyadmin.auth.mode must be either keycloak or database" }}
+{{- end }}
+{{- if and .Values.phpmyadmin.enabled (eq .Values.phpmyadmin.auth.mode "keycloak") (not .Values.keycloak.enabled) }}
+{{- fail "phpmyadmin keycloak authentication requires keycloak.enabled" }}
+{{- end }}
+{{- if and .Values.phpmyadmin.enabled (not (regexMatch "^[A-Za-z0-9_.-]+$" .Values.phpmyadmin.databaseUser)) }}
+{{- fail "phpmyadmin.databaseUser may only contain letters, digits, dots, underscores and hyphens" }}
+{{- end }}
+{{- if .Values.phpmyadmin.enabled }}
+{{- $fullname := include "nextcloud-stack.fullname" . -}}
+{{- $host := include "nextcloud-stack.phpmyadminHost" . -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-phpmyadmin-database-bootstrap
+  labels:
+    app.kubernetes.io/component: phpmyadmin-bootstrap
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "6"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: phpmyadmin-bootstrap
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: configure-user
+          image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              until mariadb-admin ping -h "$MARIADB_HOST" -uroot -p"$MARIADB_ROOT_PASSWORD" --silent; do
+                sleep 5
+              done
+
+              password_hex=$(printf %s "$PHPMYADMIN_DATABASE_PASSWORD" | od -An -tx1 | tr -d ' \n')
+              mariadb -h "$MARIADB_HOST" -uroot -p"$MARIADB_ROOT_PASSWORD" <<SQL
+              SET @password = CONVERT(0x${password_hex} USING utf8mb4);
+              SET @statement = CONCAT("CREATE USER IF NOT EXISTS '$PHPMYADMIN_DATABASE_USER'@'%' IDENTIFIED BY ", QUOTE(@password));
+              PREPARE prepared_statement FROM @statement;
+              EXECUTE prepared_statement;
+              DEALLOCATE PREPARE prepared_statement;
+              SET @statement = CONCAT("ALTER USER '$PHPMYADMIN_DATABASE_USER'@'%' IDENTIFIED BY ", QUOTE(@password));
+              PREPARE prepared_statement FROM @statement;
+              EXECUTE prepared_statement;
+              DEALLOCATE PREPARE prepared_statement;
+              GRANT ALL PRIVILEGES ON \`$MARIADB_DATABASE\`.* TO '$PHPMYADMIN_DATABASE_USER'@'%';
+              SQL
+              echo "phpMyAdmin database account configured"
+          env:
+            - name: MARIADB_HOST
+              value: {{ printf "%s-mariadb" $fullname | quote }}
+            - name: MARIADB_DATABASE
+              value: {{ .Values.mariadb.database | quote }}
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: mariadb-root-password
+            - name: PHPMYADMIN_DATABASE_USER
+              value: {{ .Values.phpmyadmin.databaseUser | quote }}
+            - name: PHPMYADMIN_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: phpmyadmin-database-password
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-phpmyadmin
+  labels:
+    app.kubernetes.io/component: phpmyadmin
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: phpmyadmin
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: {{ ternary "oauth2-proxy" "phpmyadmin" (eq .Values.phpmyadmin.auth.mode "keycloak") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-phpmyadmin
+  labels:
+    app.kubernetes.io/component: phpmyadmin
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: phpmyadmin
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: phpmyadmin
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: phpmyadmin
+          image: "{{ .Values.phpmyadmin.image.repository }}:{{ .Values.phpmyadmin.image.tag }}"
+          imagePullPolicy: {{ .Values.phpmyadmin.image.pullPolicy }}
+          ports:
+            - name: phpmyadmin
+              containerPort: 80
+          env:
+            - name: PMA_HOST
+              value: {{ printf "%s-mariadb" $fullname | quote }}
+            - name: PMA_PORT
+              value: "3306"
+            - name: PMA_ARBITRARY
+              value: "0"
+            - name: PMA_ABSOLUTE_URI
+              value: {{ printf "https://%s/" $host | quote }}
+            - name: UPLOAD_LIMIT
+              value: {{ .Values.nextcloud.phpUploadLimit | quote }}
+            - name: MEMORY_LIMIT
+              value: "512M"
+            - name: HIDE_PHP_VERSION
+              value: "true"
+            {{- if eq .Values.phpmyadmin.auth.mode "keycloak" }}
+            - name: PMA_USER
+              value: {{ .Values.phpmyadmin.databaseUser | quote }}
+            - name: PMA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: phpmyadmin-database-password
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /
+              port: phpmyadmin
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: phpmyadmin
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: phpmyadmin
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.phpmyadmin.resources | nindent 12 }}
+        {{- if eq .Values.phpmyadmin.auth.mode "keycloak" }}
+        - name: oauth2-proxy
+          image: "{{ .Values.phpmyadmin.oauth2Proxy.image.repository }}:{{ .Values.phpmyadmin.oauth2Proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.phpmyadmin.oauth2Proxy.image.pullPolicy }}
+          args:
+            - --http-address=0.0.0.0:4180
+            - --provider=keycloak-oidc
+            - --provider-display-name=Keycloak
+            - --oidc-issuer-url=https://{{ (include "nextcloud-stack.host" (list . "keycloak")) }}/realms/{{ .Values.keycloak.realm }}
+            - --client-id={{ .Values.phpmyadmin.auth.clientId }}
+            - --redirect-url=https://{{ $host }}/oauth2/callback
+            - --upstream=http://127.0.0.1:80/
+            - --email-domain=*
+            - --allowed-group={{ .Values.phpmyadmin.auth.allowedGroup }}
+            - --oidc-groups-claim={{ .Values.keycloak.groupClaim }}
+            - --scope=openid profile email
+            - --code-challenge-method=S256
+            - --skip-provider-button=true
+            - --reverse-proxy=true
+            - --cookie-secure=true
+            - --cookie-samesite=lax
+            - --cookie-name=_oauth2_proxy_phpmyadmin
+            - --cookie-expire=8h
+            - --cookie-refresh=1h
+          env:
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: phpmyadmin-oauth-client-secret
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: phpmyadmin-oauth-cookie-secret
+          ports:
+            - name: oauth2-proxy
+              containerPort: 4180
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: oauth2-proxy
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: oauth2-proxy
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.phpmyadmin.oauth2Proxy.resources | nindent 12 }}
+        {{- end }}
+{{- end }}

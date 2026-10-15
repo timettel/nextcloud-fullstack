@@ -8,6 +8,8 @@
 {{- $sessionIdle := int .Values.operator.session.idleTimeoutSeconds }}
 {{- $sessionMax := int .Values.operator.session.maxLifespanSeconds }}
 {{- $accessToken := int .Values.operator.session.accessTokenLifespanSeconds }}
+{{- $embeddedDirectory := eq (include "nextcloud-stack.identityMode" .) "embedded" }}
+{{- $ldapCaEnabled := or $embeddedDirectory (not (empty .Values.identityDirectory.external.trustedCa.secretName)) }}
 {{- if le $sessionIdle 0 }}
 {{- fail "operator.session.idleTimeoutSeconds must be greater than zero" }}
 {{- end }}
@@ -33,9 +35,9 @@ data:
     opcache.memory_consumption={{ .Values.nextcloud.opcache.memoryConsumption }}
     opcache.interned_strings_buffer={{ .Values.nextcloud.opcache.internedStringsBuffer }}
     opcache.max_accelerated_files={{ .Values.nextcloud.opcache.maxAcceleratedFiles }}
-  {{- if .Values.identityDirectory.enabled }}
+  {{- if $ldapCaEnabled }}
   ldap.conf: |
-    TLS_CACERT /etc/ssl/certs/lldap-ca.crt
+    TLS_CACERT /etc/ssl/certs/nextcloud-stack-ldap-ca.crt
     TLS_REQCERT demand
   {{- end }}
 ---
@@ -260,13 +262,13 @@ spec:
               subPath: zz-nextcloud-session.ini
               readOnly: true
             {{- end }}
-            {{- if .Values.identityDirectory.enabled }}
+            {{- if $ldapCaEnabled }}
             - name: ldap-config
               mountPath: /etc/ldap/ldap.conf
               subPath: ldap.conf
               readOnly: true
             - name: ldap-ca
-              mountPath: /etc/ssl/certs/lldap-ca.crt
+              mountPath: /etc/ssl/certs/nextcloud-stack-ldap-ca.crt
               subPath: ca.crt
               readOnly: true
             {{- end }}
@@ -287,15 +289,15 @@ spec:
         - name: php-session-config
           emptyDir: {}
         {{- end }}
-        {{- if .Values.identityDirectory.enabled }}
+        {{- if $ldapCaEnabled }}
         - name: ldap-config
           configMap:
             name: {{ include "nextcloud-stack.fullname" . }}-php
         - name: ldap-ca
           secret:
-            secretName: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+            secretName: {{ ternary (printf "%s-internal-ca" (include "nextcloud-stack.fullname" .)) .Values.identityDirectory.external.trustedCa.secretName $embeddedDirectory }}
             items:
-              - key: ca.crt
+              - key: {{ ternary "ca.crt" .Values.identityDirectory.external.trustedCa.key $embeddedDirectory }}
                 path: ca.crt
         {{- end }}
 ---
@@ -337,13 +339,13 @@ spec:
                   mountPath: /usr/local/etc/php/conf.d/zz-nextcloud-opcache.ini
                   subPath: zz-nextcloud-opcache.ini
                   readOnly: true
-                {{- if .Values.identityDirectory.enabled }}
+                {{- if $ldapCaEnabled }}
                 - name: ldap-config
                   mountPath: /etc/ldap/ldap.conf
                   subPath: ldap.conf
                   readOnly: true
                 - name: ldap-ca
-                  mountPath: /etc/ssl/certs/lldap-ca.crt
+                  mountPath: /etc/ssl/certs/nextcloud-stack-ldap-ca.crt
                   subPath: ca.crt
                   readOnly: true
                 {{- end }}
@@ -356,14 +358,14 @@ spec:
             - name: php-config
               configMap:
                 name: {{ include "nextcloud-stack.fullname" . }}-php
-            {{- if .Values.identityDirectory.enabled }}
+            {{- if $ldapCaEnabled }}
             - name: ldap-config
               configMap:
                 name: {{ include "nextcloud-stack.fullname" . }}-php
             - name: ldap-ca
               secret:
-                secretName: {{ include "nextcloud-stack.fullname" . }}-internal-ca
+                secretName: {{ ternary (printf "%s-internal-ca" (include "nextcloud-stack.fullname" .)) .Values.identityDirectory.external.trustedCa.secretName $embeddedDirectory }}
                 items:
-                  - key: ca.crt
+                  - key: {{ ternary "ca.crt" .Values.identityDirectory.external.trustedCa.key $embeddedDirectory }}
                     path: ca.crt
             {{- end }}

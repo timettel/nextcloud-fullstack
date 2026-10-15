@@ -16,7 +16,7 @@ Endpoints
 {{- if .Values.monitoring.enabled }}
   Grafana:    https://{{ include "nextcloud-stack.host" (list . "grafana") }}/
 {{- end }}
-{{- if .Values.identityDirectory.enabled }}
+{{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
   LLDAP:      https://{{ include "nextcloud-stack.host" (list . "ldap") }}/
 {{- end }}
 
@@ -47,8 +47,10 @@ Enabled integrations
 {{- end }}
 {{- if .Values.keycloak.enabled }}
   OIDC:        Keycloak realm {{ .Values.keycloak.realm }}
-{{- if .Values.identityDirectory.enabled }}
-  Directory:   LLDAP, user group {{ .Values.identityDirectory.nextcloudUsersGroup }}, admin group {{ .Values.identityDirectory.nextcloudAdminsGroup }}
+{{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
+  Directory:   embedded LLDAP, user group {{ .Values.identityDirectory.groups.users }}, admin group {{ .Values.identityDirectory.groups.admins }}
+{{- else }}
+  Directory:   external {{ .Values.identityDirectory.external.schema }}, user group {{ .Values.identityDirectory.groups.users }}, admin group {{ .Values.identityDirectory.groups.admins }}
 {{- end }}
 {{- end }}
 {{- if .Values.whiteboard.enabled }}

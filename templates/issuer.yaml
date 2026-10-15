@@ -16,7 +16,7 @@ spec:
       - http01:
           ingress:
             ingressClassName: traefik
-{{- if .Values.identityDirectory.enabled }}
+{{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer

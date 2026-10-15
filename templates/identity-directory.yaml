@@ -1,4 +1,4 @@
-{{- if .Values.identityDirectory.enabled }}
+{{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -35,7 +35,7 @@ spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: {{ .Values.identityDirectory.storage }}
+      storage: {{ .Values.identityDirectory.embedded.storage }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -60,8 +60,8 @@ spec:
     spec:
       containers:
         - name: lldap
-          image: "{{ .Values.identityDirectory.image.repository }}:{{ .Values.identityDirectory.image.tag }}"
-          imagePullPolicy: {{ .Values.identityDirectory.image.pullPolicy }}
+          image: "{{ .Values.identityDirectory.embedded.image.repository }}:{{ .Values.identityDirectory.embedded.image.tag }}"
+          imagePullPolicy: {{ .Values.identityDirectory.embedded.image.pullPolicy }}
           env:
             - name: TZ
               value: {{ .Values.nextcloud.systemConfig.defaultTimezone | quote }}
@@ -115,7 +115,7 @@ spec:
               port: http
             periodSeconds: 30
           resources:
-            {{- toYaml .Values.identityDirectory.resources | nindent 12 }}
+            {{- toYaml .Values.identityDirectory.embedded.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data
@@ -139,9 +139,9 @@ metadata:
     {{- include "nextcloud-stack.labels" . | nindent 4 }}
 data:
   10-nextcloud-users.json: |
-    {"name": {{ .Values.identityDirectory.nextcloudUsersGroup | quote }}}
+    {"name": {{ .Values.identityDirectory.groups.users | quote }}}
   20-nextcloud-admins.json: |
-    {"name": {{ .Values.identityDirectory.nextcloudAdminsGroup | quote }}}
+    {"name": {{ .Values.identityDirectory.groups.admins | quote }}}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -167,8 +167,8 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: bootstrap
-          image: "{{ .Values.identityDirectory.image.repository }}:{{ .Values.identityDirectory.image.tag }}"
-          imagePullPolicy: {{ .Values.identityDirectory.image.pullPolicy }}
+          image: "{{ .Values.identityDirectory.embedded.image.repository }}:{{ .Values.identityDirectory.embedded.image.tag }}"
+          imagePullPolicy: {{ .Values.identityDirectory.embedded.image.pullPolicy }}
           command: [/bin/sh, -c]
           args:
             - |
@@ -208,11 +208,11 @@ spec:
             - name: USER_CONFIGS_DIR
               value: /bootstrap/user-configs
             - name: LDAP_BIND_USERNAME
-              value: {{ .Values.identityDirectory.bindAccount.username | quote }}
+              value: {{ .Values.identityDirectory.embedded.bindAccount.username | quote }}
             - name: LDAP_BIND_DISPLAY_NAME
-              value: {{ .Values.identityDirectory.bindAccount.displayName | quote }}
+              value: {{ .Values.identityDirectory.embedded.bindAccount.displayName | quote }}
             - name: LDAP_BIND_EMAIL
-              value: {{ .Values.identityDirectory.bindAccount.email | quote }}
+              value: {{ printf "%s@%s" .Values.identityDirectory.embedded.bindAccount.username (include "nextcloud-stack.domain" .) | quote }}
             - name: LDAP_BIND_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -226,7 +226,7 @@ spec:
             - name: MAIL_SERVICE_DISPLAY_NAME
               value: {{ .Values.mail.serviceAccount.displayName | quote }}
             - name: MAIL_USERS_GROUP
-              value: {{ .Values.identityDirectory.nextcloudUsersGroup | quote }}
+              value: {{ .Values.identityDirectory.groups.users | quote }}
             - name: MAIL_SERVICE_PASSWORD
               valueFrom:
                 secretKeyRef:

@@ -203,7 +203,7 @@ spec:
         namespaces:
           from: Same
     {{- end }}
-    {{- if .Values.identityDirectory.enabled }}
+    {{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
     - name: lldap-http
       protocol: HTTP
       port: {{ default 8000 .Values.gateway.httpPort }}
@@ -375,7 +375,7 @@ spec:
     - name: {{ include "nextcloud-stack.fullname" . }}
       sectionName: grafana-http
     {{- end }}
-    {{- if .Values.identityDirectory.enabled }}
+    {{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
     - name: {{ include "nextcloud-stack.fullname" . }}
       sectionName: lldap-http
     {{- end }}
@@ -403,7 +403,7 @@ spec:
     {{- if .Values.monitoring.enabled }}
     - {{ (include "nextcloud-stack.host" (list . "grafana")) | quote }}
     {{- end }}
-    {{- if .Values.identityDirectory.enabled }}
+    {{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
     - {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
     {{- end }}
   rules:
@@ -533,7 +533,7 @@ spec:
         - name: {{ .Release.Name }}-grafana
           port: 80
 {{ end }}
-{{ if .Values.identityDirectory.enabled }}
+{{ if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

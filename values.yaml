@@ -26,8 +26,8 @@ operator:
     phpmyadmin: db
     grafana: grafana
     workflow: windmill
-  # Required credentials. These are deliberately operator-managed because they
-  # are recovery/admin entry points. They are stored in a Kubernetes Secret.
+  # Recovery/admin entry points stored in a Kubernetes Secret. LDAP admin is
+  # required only by the default embedded directory mode.
   admins:
     nextcloud:
       username: admin
@@ -47,7 +47,7 @@ operator:
     accessTokenLifespanSeconds: 300
     keepalive: true
   ldap:
-    # Empty derives dc=lab,dc=ettel,dc=net from operator.domain.
+    # Embedded LLDAP only. Empty derives the DN from operator.domain.
     baseDn: ""
   # Optional internal overrides. Empty values are generated once and retained
   # across Helm upgrades with lookup(). They normally stay empty.
@@ -72,6 +72,7 @@ operator:
     phpmyadminOauthCookieSecret: ""
     grafanaOauthClientSecret: ""
     grafanaAdminPassword: ""
+    # Embedded LLDAP only.
     lldapJwtSecret: ""
     lldapKeySeed: ""
     ldapBindPassword: ""
@@ -301,33 +302,83 @@ redis:
     limits:
       cpu: 500m
       memory: 512Mi
-# LLDAP is the authoritative user and group directory. Nextcloud authenticates
-# directly against it; Keycloak federates the same identities for OIDC clients.
+# A directory is mandatory. Embedded mode deploys LLDAP; external mode connects
+# Nextcloud, Keycloak and the optional mail stack to an existing LDAP or AD.
 identityDirectory:
-  enabled: true
+  mode: embedded
   # Nextcloud has no server-side switch for disabling local account creation.
   # Hide its user-management button when LDAP is the authoritative directory.
   hideNextcloudUserCreation: true
-  image:
-    repository: lldap/lldap
-    tag: stable
-    pullPolicy: IfNotPresent
-  bindAccount:
-    username: nextcloud-directory
-    displayName: Nextcloud LDAP Password Manager
-  nextcloudUsersGroup: nc-users
-  nextcloudAdminsGroup: nc-admin
-  storage: 5Gi
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
-# Postfix and Dovecot are provided by Docker Mailserver. LLDAP remains the
-# authoritative account and password source; its `mail` attribute must contain
-# the complete mailbox address below this domain.
+  groups:
+    users: nc-users
+    admins: nc-admin
+  embedded:
+    image:
+      repository: lldap/lldap
+      tag: stable
+      pullPolicy: IfNotPresent
+    bindAccount:
+      username: nextcloud-directory
+      displayName: Nextcloud LDAP Password Manager
+    storage: 5Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  external:
+    # Presets supply conventional schema mappings; every mapping and filter
+    # below can still be overridden. custom requires explicit mappings.
+    schema: activeDirectory # activeDirectory | openLdap | custom
+    host: ""
+    port: 636
+    security: ldaps # plain | starttls | ldaps
+    baseDn: ""
+    usersDn: ""
+    groupsDn: ""
+    # Optional when the groups are not direct children of groupsDn.
+    groupDns:
+      users: ""
+      admins: ""
+    bind:
+      dn: ""
+      # Prefer an existing Secret in production. Inline values belong only in
+      # the ignored values-local.yaml file.
+      password: ""
+      existingSecret:
+        name: ""
+        key: bind-password
+    trustedCa:
+      # Optional Secret in the release namespace containing a PEM CA file.
+      secretName: ""
+      key: ca.crt
+    attributes:
+      username: ""
+      rdn: ""
+      uuid: ""
+      userObjectClass: ""
+      displayName: ""
+      firstName: ""
+      lastName: ""
+      email: ""
+      groupObjectClass: ""
+      groupName: ""
+      groupMembership: ""
+      groupMembershipUser: ""
+      groupMembershipType: ""
+    filters:
+      users: ""
+      login: ""
+      groups: ""
+      mailDomain: ""
+      mailUser: ""
+      mailSender: ""
+      dovecotUser: ""
+      dovecotPass: ""
+# Postfix and Dovecot use the selected directory as their account source. Each
+# mailbox user needs a unique `mail` attribute below operator.domain.
 mail:
   enabled: true
   serviceAccount:
@@ -409,7 +460,8 @@ phpmyadmin:
     # Supported modes: keycloak, database
     mode: keycloak
     clientId: phpmyadmin
-    allowedGroup: nc-admin
+    # Empty derives identityDirectory.groups.admins.
+    allowedGroup: ""
   image:
     repository: phpmyadmin
     tag: 5.2.3-apache
@@ -449,7 +501,8 @@ monitoring:
     enabled: true
   integration:
     clientId: grafana
-    allowedGroup: nc-admin
+    # Empty derives identityDirectory.groups.admins.
+    allowedGroup: ""
     alertEmail: admin@example.com
     alertFrom: ""
   alerts:
@@ -832,23 +885,15 @@ keycloak:
   clientId: nextcloud
   providerIdentifier: keycloak
   groupClaim: groups
-  groupWhitelistRegex: "/^nc-/"
+  # Empty derives an exact match for identityDirectory.groups users/admins.
+  groupWhitelistRegex: ""
   restrictLoginToGroups: true
-  defaultGroups:
-    - nc-users
   ldapSync:
-    # LLDAP does not implement the createTimestamp/modifyTimestamp comparison
-    # filters required by Keycloak's incremental changed-users sync.
     fullPeriodSeconds: 300
+    # Embedded LLDAP does not implement Keycloak's timestamp comparison.
     changedPeriodSeconds: -1
-  adminGroupSync:
-    # Only used when Keycloak itself is the primary Nextcloud user backend.
-    # LDAP-backed installations map the LDAP admin group directly instead.
-    enabled: false
-    sourceGroup: nc-admin
-    schedule: "*/2 * * * *"
-    preservedAdmins:
-      - admin
+    # AD and conventional OpenLDAP directories support incremental sync.
+    externalChangedPeriodSeconds: 300
   storage: 10Gi
   postgresql:
     image:

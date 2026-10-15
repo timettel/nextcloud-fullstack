@@ -1,8 +1,7 @@
-{{- if and .Values.mail.enabled (not .Values.identityDirectory.enabled) }}
-{{- fail "mail.enabled requires identityDirectory.enabled because LLDAP is the mail account provisioner" }}
-{{- end }}
 {{- if .Values.mail.enabled }}
 {{- $fullname := include "nextcloud-stack.fullname" . -}}
+{{- $embeddedDirectory := eq (include "nextcloud-stack.identityMode" .) "embedded" -}}
+{{- $ldapCaEnabled := or $embeddedDirectory (not (empty .Values.identityDirectory.external.trustedCa.secretName)) -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -217,36 +216,40 @@ spec:
             - name: ACCOUNT_PROVISIONER
               value: LDAP
             - name: LDAP_SERVER_HOST
-              value: {{ printf "ldap://%s-lldap:3890" $fullname | quote }}
+              value: {{ printf "%s:%s" (include "nextcloud-stack.ldapUri" .) (include "nextcloud-stack.ldapPort" .) | quote }}
+            - name: LDAP_START_TLS
+              value: {{ ternary "yes" "no" (and (not $embeddedDirectory) (eq .Values.identityDirectory.external.security "starttls")) | quote }}
+            - name: DOVECOT_TLS
+              value: {{ ternary "yes" "no" (and (not $embeddedDirectory) (eq .Values.identityDirectory.external.security "starttls")) | quote }}
             - name: LDAP_SEARCH_BASE
-              value: {{ printf "ou=people,%s" (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+              value: {{ include "nextcloud-stack.ldapUsersDn" . | quote }}
             - name: LDAP_BIND_DN
-              value: {{ printf "uid=%s,ou=people,%s" .Values.operator.admins.ldap.username (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+              value: {{ include "nextcloud-stack.ldapBindDn" . | quote }}
             - name: LDAP_BIND_PW
               valueFrom:
                 secretKeyRef:
-                  name: {{ $fullname }}
-                  key: lldap-admin-password
+                  name: {{ include "nextcloud-stack.ldapBindSecretName" . }}
+                  key: {{ include "nextcloud-stack.ldapBindSecretKey" . }}
             - name: LDAP_QUERY_FILTER_DOMAIN
-              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(mail=*@%%s))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "mailDomain") | quote }}
             - name: LDAP_QUERY_FILTER_USER
-              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(mail=%%s))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "mailUser") | quote }}
             - name: LDAP_QUERY_FILTER_ALIAS
               value: "(uid=__no_mail_alias__)"
             - name: LDAP_QUERY_FILTER_GROUP
               value: "(uid=__no_mail_group__)"
             - name: LDAP_QUERY_FILTER_SENDERS
-              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(mail=%%s))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "mailSender") | quote }}
             - name: SPOOF_PROTECTION
               value: "1"
             - name: DOVECOT_USER_FILTER
-              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(|(uid=%%{user | username})(mail=%%{user})))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "dovecotUser") | quote }}
             - name: DOVECOT_PASS_FILTER
-              value: {{ printf "(&(objectClass=person)(memberOf=cn=%s,ou=groups,%s)(|(uid=%%{user | username})(mail=%%{user})))" .Values.identityDirectory.nextcloudUsersGroup (include "nextcloud-stack.ldapBaseDn" .) | quote }}
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "dovecotPass") | quote }}
             - name: DOVECOT_USER_ATTRS
-              value: "=uid=5000,=gid=5000,=home=/var/mail/%{ldap:uid},=mail=maildir:~/Maildir"
+              value: {{ printf "=uid=5000,=gid=5000,=home=/var/mail/%%{ldap:%s},=mail=maildir:~/Maildir" (include "nextcloud-stack.ldapUsernameAttr" .) | quote }}
             - name: DOVECOT_PASS_ATTRS
-              value: "uid=user,userPassword=password"
+              value: {{ printf "%s=user" (include "nextcloud-stack.ldapUsernameAttr" .) | quote }}
             - name: DOVECOT_AUTH_BIND
               value: "yes"
             - name: SSL_TYPE
@@ -339,6 +342,16 @@ spec:
             - name: tls
               mountPath: /etc/dms-certs
               readOnly: true
+            {{- if $ldapCaEnabled }}
+            - name: ldap-config
+              mountPath: /etc/ldap/ldap.conf
+              subPath: ldap.conf
+              readOnly: true
+            - name: ldap-ca
+              mountPath: /etc/ssl/certs/nextcloud-stack-ldap-ca.crt
+              subPath: ca.crt
+              readOnly: true
+            {{- end }}
       volumes:
         - name: mail-data
           persistentVolumeClaim:
@@ -360,4 +373,15 @@ spec:
         - name: tls
           secret:
             secretName: {{ $fullname }}-tls
+        {{- if $ldapCaEnabled }}
+        - name: ldap-config
+          configMap:
+            name: {{ $fullname }}-php
+        - name: ldap-ca
+          secret:
+            secretName: {{ ternary (printf "%s-internal-ca" $fullname) .Values.identityDirectory.external.trustedCa.secretName $embeddedDirectory }}
+            items:
+              - key: {{ ternary "ca.crt" .Values.identityDirectory.external.trustedCa.key $embeddedDirectory }}
+                path: ca.crt
+        {{- end }}
 {{- end }}

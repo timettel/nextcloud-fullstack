@@ -1,3 +1,5 @@
+{{- $embeddedDirectory := eq (include "nextcloud-stack.identityMode" .) "embedded" -}}
+{{- $ldapCaEnabled := or $embeddedDirectory (not (empty .Values.identityDirectory.external.trustedCa.secretName)) -}}
 {{- if .Values.keycloak.enabled }}
 apiVersion: v1
 kind: ConfigMap
@@ -25,16 +27,10 @@ data:
       "loginWithEmailAllowed": true,
       "duplicateEmailsAllowed": false,
       "groups": [
-        {{- range $index, $group := .Values.keycloak.defaultGroups }}
-        {{- if $index }},{{ end }}
-        { "name": {{ $group | quote }} }
-        {{- end }}
+        { "name": {{ .Values.identityDirectory.groups.users | quote }} }
       ],
       "defaultGroups": [
-        {{- range $index, $group := .Values.keycloak.defaultGroups }}
-        {{- if $index }},{{ end }}
-        {{ printf "/%s" $group | quote }}
-        {{- end }}
+        {{ printf "/%s" .Values.identityDirectory.groups.users | quote }}
       ],
       "clients": [
         {
@@ -312,6 +308,10 @@ spec:
               value: "true"
             - name: KC_METRICS_ENABLED
               value: "true"
+            {{- if $ldapCaEnabled }}
+            - name: KC_TRUSTSTORE_PATHS
+              value: /opt/keycloak/conf/truststores
+            {{- end }}
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
               value: {{ .Values.operator.admins.keycloak.username | quote }}
             - name: KC_BOOTSTRAP_ADMIN_PASSWORD
@@ -360,8 +360,22 @@ spec:
             - name: realm
               mountPath: /opt/keycloak/data/import
               readOnly: true
+            {{- if $ldapCaEnabled }}
+            - name: ldap-ca
+              mountPath: /opt/keycloak/conf/truststores/ldap-ca.crt
+              subPath: ca.crt
+              readOnly: true
+            {{- end }}
       volumes:
         - name: realm
           configMap:
             name: {{ include "nextcloud-stack.fullname" . }}-keycloak-realm
+        {{- if $ldapCaEnabled }}
+        - name: ldap-ca
+          secret:
+            secretName: {{ ternary (printf "%s-internal-ca" (include "nextcloud-stack.fullname" .)) .Values.identityDirectory.external.trustedCa.secretName $embeddedDirectory }}
+            items:
+              - key: {{ ternary "ca.crt" .Values.identityDirectory.external.trustedCa.key $embeddedDirectory }}
+                path: ca.crt
+        {{- end }}
 {{- end }}

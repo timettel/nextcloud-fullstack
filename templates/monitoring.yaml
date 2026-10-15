@@ -21,8 +21,8 @@ data:
   GF_AUTH_GENERIC_OAUTH_AUTH_URL: {{ printf "%s/realms/%s/protocol/openid-connect/auth" $keycloakUrl .Values.keycloak.realm | quote }}
   GF_AUTH_GENERIC_OAUTH_TOKEN_URL: {{ printf "%s/realms/%s/protocol/openid-connect/token" $keycloakUrl .Values.keycloak.realm | quote }}
   GF_AUTH_GENERIC_OAUTH_API_URL: {{ printf "%s/realms/%s/protocol/openid-connect/userinfo" $keycloakUrl .Values.keycloak.realm | quote }}
-  GF_AUTH_GENERIC_OAUTH_ALLOWED_GROUPS: {{ .Values.monitoring.integration.allowedGroup | quote }}
-  GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: {{ printf "contains(groups[*], '%s') && 'GrafanaAdmin' || 'None'" .Values.monitoring.integration.allowedGroup | quote }}
+  GF_AUTH_GENERIC_OAUTH_ALLOWED_GROUPS: {{ default .Values.identityDirectory.groups.admins .Values.monitoring.integration.allowedGroup | quote }}
+  GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: {{ printf "contains(groups[*], '%s') && 'GrafanaAdmin' || 'None'" (default .Values.identityDirectory.groups.admins .Values.monitoring.integration.allowedGroup) | quote }}
   GF_AUTH_SIGNOUT_REDIRECT_URL: {{ printf "%s/realms/%s/protocol/openid-connect/logout?client_id=%s&post_logout_redirect_uri=%s" $keycloakUrl .Values.keycloak.realm .Values.monitoring.integration.clientId ($grafanaUrl | urlquery) | quote }}
 ---
 apiVersion: v1

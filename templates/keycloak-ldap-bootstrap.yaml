@@ -1,4 +1,4 @@
-{{- if and .Values.keycloak.enabled .Values.identityDirectory.enabled }}
+{{- if .Values.keycloak.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -57,30 +57,32 @@ spec:
                 | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
 
               if [ -z "$provider_id" ]; then
-                echo "Creating the LLDAP user federation provider..."
+                echo "Creating the LDAP user federation provider..."
                 "$KCADM" create components -r "$KEYCLOAK_REALM" \
                   -s name=lldap \
                   -s providerId=ldap \
                   -s providerType=org.keycloak.storage.UserStorageProvider \
                   -s parentId="$realm_id" \
-                  -s 'config.vendor=["other"]' \
+                  -s "config.vendor=[\"$LDAP_VENDOR\"]" \
                   -s 'config.editMode=["READ_ONLY"]' \
                   -s 'config.enabled=["true"]' \
                   -s 'config.priority=["0"]' \
                   -s 'config.importEnabled=["true"]' \
                   -s 'config.syncRegistrations=["false"]' \
-                  -s 'config.usernameLDAPAttribute=["uid"]' \
-                  -s 'config.rdnLDAPAttribute=["uid"]' \
-                  -s 'config.uuidLDAPAttribute=["uid"]' \
-                  -s 'config.userObjectClasses=["person"]' \
+                  -s "config.usernameLDAPAttribute=[\"$LDAP_USERNAME_ATTR\"]" \
+                  -s "config.rdnLDAPAttribute=[\"$LDAP_RDN_ATTR\"]" \
+                  -s "config.uuidLDAPAttribute=[\"$LDAP_UUID_ATTR\"]" \
+                  -s "config.userObjectClasses=[\"$LDAP_USER_OBJECT_CLASS\"]" \
                   -s 'config.searchScope=["1"]' \
-                  -s 'config.pagination=["false"]' \
+                  -s "config.pagination=[\"$LDAP_PAGINATION\"]" \
                   -s 'config.connectionPooling=["true"]' \
                   -s 'config.authType=["simple"]' \
                   -s "config.connectionUrl=[\"$LDAP_URL\"]" \
                   -s "config.usersDn=[\"$LDAP_USERS_DN\"]" \
                   -s "config.bindDn=[\"$LDAP_BIND_DN\"]" \
                   -s "config.bindCredential=[\"$LDAP_BIND_PASSWORD\"]" \
+                  -s "config.customUserSearchFilter=[\"$LDAP_USER_FILTER\"]" \
+                  -s 'config.useTruststoreSpi=["always"]' \
                   -s 'config.batchSizeForSync=["1000"]' \
                   -s 'config.fullSyncPeriod=["3600"]' \
                   -s 'config.changedSyncPeriod=["300"]' \
@@ -92,15 +94,28 @@ spec:
               fi
               test -n "$provider_id"
 
-              # Keep the complete sync frequent and disable Keycloak's
-              # timestamp-based incremental sync, which LLDAP does not support.
+              # Reconcile the complete provider so changing directory modes or
+              # schema presets does not leave stale federation settings.
               "$KCADM" update "components/$provider_id" -r "$KEYCLOAK_REALM" \
+                -s "config.vendor=[\"$LDAP_VENDOR\"]" \
+                -s 'config.editMode=["READ_ONLY"]' \
+                -s 'config.enabled=["true"]' \
+                -s 'config.importEnabled=["true"]' \
+                -s "config.connectionUrl=[\"$LDAP_URL\"]" \
+                -s "config.usersDn=[\"$LDAP_USERS_DN\"]" \
+                -s "config.bindDn=[\"$LDAP_BIND_DN\"]" \
+                -s "config.bindCredential=[\"$LDAP_BIND_PASSWORD\"]" \
+                -s "config.usernameLDAPAttribute=[\"$LDAP_USERNAME_ATTR\"]" \
+                -s "config.rdnLDAPAttribute=[\"$LDAP_RDN_ATTR\"]" \
+                -s "config.uuidLDAPAttribute=[\"$LDAP_UUID_ATTR\"]" \
+                -s "config.userObjectClasses=[\"$LDAP_USER_OBJECT_CLASS\"]" \
+                -s "config.customUserSearchFilter=[\"$LDAP_USER_FILTER\"]" \
+                -s "config.pagination=[\"$LDAP_PAGINATION\"]" \
+                -s 'config.useTruststoreSpi=["always"]' \
                 -s "config.fullSyncPeriod=[\"$LDAP_FULL_SYNC_PERIOD\"]" \
                 -s "config.changedSyncPeriod=[\"$LDAP_CHANGED_SYNC_PERIOD\"]" >/dev/null
 
-              # Keycloak's generic LDAP defaults map cn to firstName. LLDAP's
-              # cn is the complete display name, so use its dedicated givenName
-              # and sn attributes to avoid names such as "Tim Ettel Ettel".
+              # Reconcile explicit name mappings for all supported schemas.
               first_name_mapper_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
                 -q parent="$provider_id" -q name="first name" --fields id,name \
                 | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
@@ -111,38 +126,53 @@ spec:
               test -n "$last_name_mapper_id"
 
               "$KCADM" update "components/$first_name_mapper_id" -r "$KEYCLOAK_REALM" \
-                -s 'config."ldap.attribute"=["givenName"]' \
+                -s "config.\"ldap.attribute\"=[\"$LDAP_FIRST_NAME_ATTR\"]" \
                 -s 'config."user.model.attribute"=["firstName"]' >/dev/null
               "$KCADM" update "components/$last_name_mapper_id" -r "$KEYCLOAK_REALM" \
-                -s 'config."ldap.attribute"=["sn"]' \
+                -s "config.\"ldap.attribute\"=[\"$LDAP_LAST_NAME_ATTR\"]" \
                 -s 'config."user.model.attribute"=["lastName"]' >/dev/null
 
               mapper_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
                 -q parent="$provider_id" -q name=groups --fields id,name \
                 | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
               if [ -z "$mapper_id" ]; then
-                echo "Creating the LLDAP group mapper..."
+                echo "Creating the LDAP group mapper..."
                 "$KCADM" create components -r "$KEYCLOAK_REALM" \
                   -s name=groups \
                   -s providerId=group-ldap-mapper \
                   -s providerType=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
                   -s parentId="$provider_id" \
                   -s "config.\"groups.dn\"=[\"$LDAP_GROUPS_DN\"]" \
-                  -s 'config."group.name.ldap.attribute"=["cn"]' \
-                  -s 'config."group.object.classes"=["groupOfUniqueNames"]' \
-                  -s 'config."membership.ldap.attribute"=["uniqueMember"]' \
-                  -s 'config."membership.attribute.type"=["DN"]' \
-                  -s 'config."membership.user.ldap.attribute"=["uid"]' \
+                  -s "config.\"groups.ldap.filter\"=[\"$LDAP_GROUP_FILTER\"]" \
+                  -s "config.\"group.name.ldap.attribute\"=[\"$LDAP_GROUP_NAME_ATTR\"]" \
+                  -s "config.\"group.object.classes\"=[\"$LDAP_GROUP_OBJECT_CLASS\"]" \
+                  -s "config.\"membership.ldap.attribute\"=[\"$LDAP_GROUP_MEMBERSHIP_ATTR\"]" \
+                  -s "config.\"membership.attribute.type\"=[\"$LDAP_GROUP_MEMBERSHIP_TYPE\"]" \
+                  -s "config.\"membership.user.ldap.attribute\"=[\"$LDAP_GROUP_MEMBERSHIP_USER_ATTR\"]" \
                   -s 'config.mode=["READ_ONLY"]' \
                   -s 'config."user.roles.retrieve.strategy"=["LOAD_GROUPS_BY_MEMBER_ATTRIBUTE"]' \
                   -s 'config."preserve.group.inheritance"=["true"]' \
                   -s 'config."drop.non.existing.groups.during.sync"=["false"]'
+                mapper_id=$("$KCADM" get components -r "$KEYCLOAK_REALM" \
+                  -q parent="$provider_id" -q name=groups --fields id,name \
+                  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
               fi
+              test -n "$mapper_id"
+              "$KCADM" update "components/$mapper_id" -r "$KEYCLOAK_REALM" \
+                -s "config.\"groups.dn\"=[\"$LDAP_GROUPS_DN\"]" \
+                -s "config.\"groups.ldap.filter\"=[\"$LDAP_GROUP_FILTER\"]" \
+                -s "config.\"group.name.ldap.attribute\"=[\"$LDAP_GROUP_NAME_ATTR\"]" \
+                -s "config.\"group.object.classes\"=[\"$LDAP_GROUP_OBJECT_CLASS\"]" \
+                -s "config.\"membership.ldap.attribute\"=[\"$LDAP_GROUP_MEMBERSHIP_ATTR\"]" \
+                -s "config.\"membership.attribute.type\"=[\"$LDAP_GROUP_MEMBERSHIP_TYPE\"]" \
+                -s "config.\"membership.user.ldap.attribute\"=[\"$LDAP_GROUP_MEMBERSHIP_USER_ATTR\"]" \
+                -s 'config.mode=["READ_ONLY"]' \
+                -s 'config."user.roles.retrieve.strategy"=["LOAD_GROUPS_BY_MEMBER_ATTRIBUTE"]' >/dev/null
 
               echo "Synchronizing LDAP users and groups into Keycloak..."
               "$KCADM" create "user-storage/$provider_id/sync?action=triggerFullSync" \
                 -r "$KEYCLOAK_REALM" >/dev/null
-              echo "Keycloak LLDAP federation configured"
+              echo "Keycloak LDAP federation configured"
 
               if [ "$ROUNDCUBE_ENABLED" = true ]; then
                 echo "Ensuring the Roundcube OpenID Connect client exists..."
@@ -260,22 +290,52 @@ spec:
             - name: ACCESS_TOKEN_LIFESPAN
               value: {{ .Values.operator.session.accessTokenLifespanSeconds | quote }}
             - name: LDAP_URL
-              value: "ldap://{{ include "nextcloud-stack.fullname" . }}-lldap:389"
+              value: {{ printf "%s:%s" (include "nextcloud-stack.ldapUri" .) (include "nextcloud-stack.ldapPort" .) | quote }}
             - name: LDAP_USERS_DN
-              value: "ou=people,{{ (include "nextcloud-stack.ldapBaseDn" .) }}"
+              value: {{ include "nextcloud-stack.ldapUsersDn" . | quote }}
             - name: LDAP_GROUPS_DN
-              value: "ou=groups,{{ (include "nextcloud-stack.ldapBaseDn" .) }}"
+              value: {{ include "nextcloud-stack.ldapGroupsDn" . | quote }}
+            - name: LDAP_GROUP_FILTER
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "groups") | quote }}
             - name: LDAP_BIND_DN
-              value: "uid={{ .Values.operator.admins.ldap.username }},ou=people,{{ (include "nextcloud-stack.ldapBaseDn" .) }}"
+              value: {{ include "nextcloud-stack.ldapBindDn" . | quote }}
             - name: LDAP_BIND_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "nextcloud-stack.fullname" . }}
-                  key: lldap-admin-password
+                  name: {{ include "nextcloud-stack.ldapBindSecretName" . }}
+                  key: {{ include "nextcloud-stack.ldapBindSecretKey" . }}
+            - name: LDAP_VENDOR
+              value: {{ ternary "ad" "other" (and (eq (include "nextcloud-stack.identityMode" .) "external") (eq .Values.identityDirectory.external.schema "activeDirectory")) | quote }}
+            - name: LDAP_PAGINATION
+              value: {{ ternary "true" "false" (and (eq (include "nextcloud-stack.identityMode" .) "external") (eq .Values.identityDirectory.external.schema "activeDirectory")) | quote }}
+            - name: LDAP_USERNAME_ATTR
+              value: {{ include "nextcloud-stack.ldapUsernameAttr" . | quote }}
+            - name: LDAP_RDN_ATTR
+              value: {{ include "nextcloud-stack.ldapRdnAttr" . | quote }}
+            - name: LDAP_UUID_ATTR
+              value: {{ include "nextcloud-stack.ldapUuidAttr" . | quote }}
+            - name: LDAP_USER_OBJECT_CLASS
+              value: {{ include "nextcloud-stack.ldapUserObjectClass" . | quote }}
+            - name: LDAP_USER_FILTER
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "users") | quote }}
+            - name: LDAP_FIRST_NAME_ATTR
+              value: {{ include "nextcloud-stack.ldapFirstNameAttr" . | quote }}
+            - name: LDAP_LAST_NAME_ATTR
+              value: {{ include "nextcloud-stack.ldapLastNameAttr" . | quote }}
+            - name: LDAP_GROUP_NAME_ATTR
+              value: {{ include "nextcloud-stack.ldapGroupNameAttr" . | quote }}
+            - name: LDAP_GROUP_OBJECT_CLASS
+              value: {{ include "nextcloud-stack.ldapGroupObjectClass" . | quote }}
+            - name: LDAP_GROUP_MEMBERSHIP_ATTR
+              value: {{ include "nextcloud-stack.ldapGroupMembershipAttr" . | quote }}
+            - name: LDAP_GROUP_MEMBERSHIP_TYPE
+              value: {{ include "nextcloud-stack.ldapGroupMembershipType" . | quote }}
+            - name: LDAP_GROUP_MEMBERSHIP_USER_ATTR
+              value: {{ include "nextcloud-stack.ldapGroupMembershipUserAttr" . | quote }}
             - name: LDAP_FULL_SYNC_PERIOD
               value: {{ .Values.keycloak.ldapSync.fullPeriodSeconds | quote }}
             - name: LDAP_CHANGED_SYNC_PERIOD
-              value: {{ .Values.keycloak.ldapSync.changedPeriodSeconds | quote }}
+              value: {{ ternary .Values.keycloak.ldapSync.changedPeriodSeconds .Values.keycloak.ldapSync.externalChangedPeriodSeconds (eq (include "nextcloud-stack.identityMode" .) "embedded") | quote }}
             - name: ROUNDCUBE_ENABLED
               value: {{ .Values.roundcube.enabled | quote }}
             {{- if .Values.roundcube.enabled }}

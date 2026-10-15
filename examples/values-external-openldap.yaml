@@ -1,0 +1,20 @@
+# Overlay for a conventional OpenLDAP directory with the memberOf overlay.
+# Create the referenced bind Secret in the Helm release namespace first.
+identityDirectory:
+  mode: external
+  groups:
+    users: nc-users
+    admins: nc-admin
+  external:
+    schema: openLdap
+    host: ldap.example.com
+    port: 636
+    security: ldaps
+    baseDn: dc=example,dc=com
+    usersDn: ou=people,dc=example,dc=com
+    groupsDn: ou=groups,dc=example,dc=com
+    bind:
+      dn: uid=svc-nextcloud,ou=people,dc=example,dc=com
+      existingSecret:
+        name: nextcloud-external-ldap
+        key: bind-password

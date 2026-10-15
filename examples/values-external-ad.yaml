@@ -1,0 +1,23 @@
+# Overlay for an existing Active Directory. Create both referenced Secrets in
+# the Helm release namespace before deployment.
+identityDirectory:
+  mode: external
+  groups:
+    users: nc-users
+    admins: nc-admin
+  external:
+    schema: activeDirectory
+    host: dc01.example.com
+    port: 636
+    security: ldaps
+    baseDn: DC=example,DC=com
+    usersDn: OU=Users,DC=example,DC=com
+    groupsDn: OU=Groups,DC=example,DC=com
+    bind:
+      dn: CN=svc-nextcloud,OU=Service Accounts,DC=example,DC=com
+      existingSecret:
+        name: nextcloud-external-ldap
+        key: bind-password
+    trustedCa:
+      secretName: example-directory-ca
+      key: ca.crt

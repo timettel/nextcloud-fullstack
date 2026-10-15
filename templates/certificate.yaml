@@ -34,14 +34,14 @@ spec:
     {{- if .Values.monitoring.enabled }}
     - {{ (include "nextcloud-stack.host" (list . "grafana")) | quote }}
     {{- end }}
-    {{- if .Values.identityDirectory.enabled }}
+    {{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
     - {{ (include "nextcloud-stack.host" (list . "ldap")) | quote }}
     {{- end }}
     {{- if .Values.mail.enabled }}
     - {{ (include "nextcloud-stack.host" (list . "mail")) | quote }}
     {{- end }}
 
-{{- if .Values.identityDirectory.enabled }}
+{{- if eq (include "nextcloud-stack.identityMode" .) "embedded" }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate

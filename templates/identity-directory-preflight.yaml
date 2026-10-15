@@ -1,0 +1,128 @@
+{{- if eq (include "nextcloud-stack.identityMode" .) "external" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-ldap-preflight
+  labels:
+    app.kubernetes.io/component: identity-directory-preflight
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: identity-directory-preflight
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 33
+        runAsGroup: 33
+        runAsNonRoot: true
+      containers:
+        - name: check
+          image: "{{ .Values.nextcloud.image.repository }}:{{ .Values.nextcloud.image.tag }}"
+          imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+          command: [php, -r]
+          args:
+            - |
+              $uri = getenv('LDAP_URI') . ':' . getenv('LDAP_PORT');
+              $ldap = @ldap_connect($uri);
+              if (!$ldap) {
+                  fwrite(STDERR, "Unable to initialize LDAP connection to $uri\n");
+                  exit(1);
+              }
+              ldap_set_option($ldap, LDAP_OPT_PROTOCOL_VERSION, 3);
+              ldap_set_option($ldap, LDAP_OPT_REFERRALS, 0);
+              if (getenv('LDAP_STARTTLS') === '1' && !@ldap_start_tls($ldap)) {
+                  fwrite(STDERR, "STARTTLS negotiation with $uri failed\n");
+                  exit(1);
+              }
+              if (!@ldap_bind($ldap, getenv('LDAP_BIND_DN'), getenv('LDAP_BIND_PASSWORD'))) {
+                  fwrite(STDERR, "LDAP bind failed: " . ldap_error($ldap) . "\n");
+                  exit(1);
+              }
+              foreach (['LDAP_USERS_DN', 'LDAP_GROUPS_DN'] as $variable) {
+                  $base = getenv($variable);
+                  $search = @ldap_search($ldap, $base, '(objectClass=*)', ['dn'], 0, 1, 5);
+                  if ($search === false) {
+                      fwrite(STDERR, "LDAP search below $base failed: " . ldap_error($ldap) . "\n");
+                      exit(1);
+                  }
+              }
+              foreach (['LDAP_USERS_GROUP_DN', 'LDAP_ADMINS_GROUP_DN'] as $variable) {
+                  $dn = getenv($variable);
+                  if (@ldap_read($ldap, $dn, '(objectClass=*)', ['dn'], 0, 1, 5) === false) {
+                      fwrite(STDERR, "Required LDAP group $dn is not readable: " . ldap_error($ldap) . "\n");
+                      exit(1);
+                  }
+              }
+              $users = @ldap_search($ldap, getenv('LDAP_USERS_DN'), getenv('LDAP_USER_FILTER'), [getenv('LDAP_USERNAME_ATTR'), getenv('LDAP_EMAIL_ATTR')], 0, 1, 5);
+              if ($users === false) {
+                  fwrite(STDERR, "LDAP user filter is invalid: " . ldap_error($ldap) . "\n");
+                  exit(1);
+              }
+              if (ldap_count_entries($ldap, $users) === 0) {
+                  fwrite(STDERR, "Warning: LDAP user filter currently matches no users\n");
+              }
+              echo "External LDAP connection, bind and search bases are valid\n";
+          env:
+            - name: LDAP_URI
+              value: {{ include "nextcloud-stack.ldapUri" . | quote }}
+            - name: LDAP_PORT
+              value: {{ include "nextcloud-stack.ldapPort" . | quote }}
+            - name: LDAP_STARTTLS
+              value: {{ ternary "1" "0" (eq .Values.identityDirectory.external.security "starttls") | quote }}
+            - name: LDAP_USERS_DN
+              value: {{ include "nextcloud-stack.ldapUsersDn" . | quote }}
+            - name: LDAP_GROUPS_DN
+              value: {{ include "nextcloud-stack.ldapGroupsDn" . | quote }}
+            - name: LDAP_USERS_GROUP_DN
+              value: {{ include "nextcloud-stack.ldapUserGroupDn" . | quote }}
+            - name: LDAP_ADMINS_GROUP_DN
+              value: {{ include "nextcloud-stack.ldapAdminGroupDn" . | quote }}
+            - name: LDAP_USER_FILTER
+              value: {{ include "nextcloud-stack.ldapFilter" (list . "users") | quote }}
+            - name: LDAP_USERNAME_ATTR
+              value: {{ include "nextcloud-stack.ldapUsernameAttr" . | quote }}
+            - name: LDAP_EMAIL_ATTR
+              value: {{ include "nextcloud-stack.ldapEmailAttr" . | quote }}
+            - name: LDAP_BIND_DN
+              value: {{ include "nextcloud-stack.ldapBindDn" . | quote }}
+            - name: LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nextcloud-stack.ldapBindSecretName" . }}
+                  key: {{ include "nextcloud-stack.ldapBindSecretKey" . }}
+          {{- if .Values.identityDirectory.external.trustedCa.secretName }}
+          volumeMounts:
+            - name: ldap-config
+              mountPath: /etc/ldap/ldap.conf
+              subPath: ldap.conf
+              readOnly: true
+            - name: ldap-ca
+              mountPath: /etc/ssl/certs/nextcloud-stack-ldap-ca.crt
+              subPath: ca.crt
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.helperResources | nindent 12 }}
+      {{- if .Values.identityDirectory.external.trustedCa.secretName }}
+      volumes:
+        - name: ldap-config
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-php
+        - name: ldap-ca
+          secret:
+            secretName: {{ .Values.identityDirectory.external.trustedCa.secretName }}
+            items:
+              - key: {{ .Values.identityDirectory.external.trustedCa.key }}
+                path: ca.crt
+      {{- end }}
+{{- end }}

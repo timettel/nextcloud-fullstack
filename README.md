@@ -14,7 +14,8 @@ jobs.
 - EuroOffice, Full Text Search, notify_push, ClamAV and Whiteboard
 - Talk HPB, Coturn and Talk Recording
 - AppAPI HaRP and the Windmill workflow engine
-- LLDAP, Keycloak, Postfix/Dovecot, Roundcube and phpMyAdmin
+- embedded LLDAP or an external LDAP/AD, Keycloak, Postfix/Dovecot, Roundcube
+  and phpMyAdmin
 - optional Checkmk Kubernetes Cluster and Node Collectors
 - Gateway API routes and cert-manager certificates for all HTTP endpoints
 
@@ -75,14 +76,19 @@ configuration surface. It contains:
 - `subdomains`: endpoint labels below the DNS zone
 - `admins`: the three deliberately managed recovery credentials
 - `session`: shared idle, maximum and OIDC token lifetimes for the web clients
-- `ldap.baseDn`: optional override; empty derives the DN from `domain`
+- `ldap.baseDn`: optional embedded-LLDAP base DN override
 - `optionalSecrets`: internal secret overrides, normally left empty
 
-Only these passwords must be supplied explicitly:
+With the default embedded directory, only these passwords must be supplied
+explicitly:
 
 - `operator.admins.nextcloud.password`
 - `operator.admins.ldap.password`
 - `operator.admins.keycloak.password`
+
+External directory mode does not use `operator.admins.ldap`. It additionally
+requires either an inline bind password in the ignored `values-local.yaml` or a
+reference to an existing Kubernetes Secret.
 
 The repository ships with `CHANGE_ME` placeholders. After inserting real
 credentials, put deployment-specific overrides in the ignored
@@ -99,6 +105,105 @@ optional override intentionally rotates that credential.
 Component sections below `operator` contain feature switches, image versions,
 storage sizes, resources and advanced integration settings. They are valid
 operator controls, but do not normally need editing for a standard deployment.
+
+## Identity Directory
+
+An LDAP directory is mandatory because Nextcloud, Keycloak and the optional
+mail service share the same identities. `identityDirectory.mode` selects its
+source:
+
+- `embedded` deploys and bootstraps LLDAP inside the release. This is the
+  default and preserves the reference deployment's current behavior.
+- `external` omits LLDAP and connects all consumers to an existing directory.
+
+External mode supports `activeDirectory`, `openLdap` and `custom` schema
+profiles. The first two supply conventional object classes and attribute
+mappings. Every generated mapping and filter remains independently
+overridable under `external.attributes` and `external.filters`. Ready-to-edit
+overlays are included in `examples/values-external-ad.yaml` and
+`examples/values-external-openldap.yaml`.
+
+### Active Directory
+
+Put deployment-specific and sensitive values in `values-local.yaml`:
+
+```yaml
+identityDirectory:
+  mode: external
+  groups:
+    users: nc-users
+    admins: nc-admin
+  external:
+    schema: activeDirectory
+    host: dc01.example.com
+    port: 636
+    security: ldaps
+    baseDn: DC=example,DC=com
+    usersDn: OU=Users,DC=example,DC=com
+    groupsDn: OU=Groups,DC=example,DC=com
+    bind:
+      dn: CN=svc-nextcloud,OU=Service Accounts,DC=example,DC=com
+      existingSecret:
+        name: nextcloud-external-ldap
+        key: bind-password
+    trustedCa:
+      secretName: example-directory-ca
+      key: ca.crt
+```
+
+Create referenced Secrets in the release namespace before running Helm:
+
+```bash
+kubectl -n nextcloud create secret generic nextcloud-external-ldap \
+  --from-literal=bind-password='REPLACE_ME'
+kubectl -n nextcloud create secret generic example-directory-ca \
+  --from-file=ca.crt=company-directory-ca.pem
+```
+
+Omit `trustedCa` when the LDAP server certificate chains to a CA already trusted
+by the application images. `plain`, `starttls` and `ldaps` are accepted security
+modes; production directories should use StartTLS or LDAPS.
+
+### OpenLDAP
+
+The OpenLDAP preset expects `inetOrgPerson` users, `groupOfNames` groups,
+`entryUUID`, `uid`, `mail` and a working `memberOf` overlay:
+
+```yaml
+identityDirectory:
+  mode: external
+  external:
+    schema: openLdap
+    host: ldap.example.com
+    port: 636
+    security: ldaps
+    baseDn: dc=example,dc=com
+    usersDn: ou=people,dc=example,dc=com
+    groupsDn: ou=groups,dc=example,dc=com
+    bind:
+      dn: uid=svc-nextcloud,ou=people,dc=example,dc=com
+      existingSecret:
+        name: nextcloud-external-ldap
+        key: bind-password
+```
+
+Use `external.filters` when the directory has no `memberOf` overlay, uses nested
+groups, or should restrict users differently. Set `schema: custom` and provide
+all entries below `external.attributes` for another LDAP schema. Set
+`external.groupDns.users` or `external.groupDns.admins` when either group is not
+a direct child of `groupsDn`.
+
+The users and administrators groups must already exist in an external
+directory. The bind identity needs read access to users, groups and membership
+attributes. Users require a unique login attribute and, when mail is enabled, a
+unique `mail` attribute in `operator.domain`. Dovecot verifies passwords using
+LDAP bind, so password hashes do not need to be readable.
+
+On install and upgrade, an external-directory preflight hook verifies DNS/TLS,
+bind credentials and both search bases before Keycloak and Nextcloud are
+reconciled. Keycloak federation remains read-only. Switching an established
+deployment between embedded and external directories changes identity IDs and
+must be treated as an identity migration, not as an in-place account rename.
 
 ## DNS and Network
 
@@ -160,9 +265,9 @@ objects on other Kubernetes distributions.
 
 `monitoring.enabled` installs Prometheus Operator, Prometheus, Alertmanager,
 Grafana, kube-state-metrics and node-exporter. Grafana authenticates directly
-against Keycloak; only members of `monitoring.integration.allowedGroup`
-(`nc-admin` by default) are admitted and receive the Grafana administrator
-role.
+against Keycloak; by default, only members of
+`identityDirectory.groups.admins` are admitted and receive the Grafana
+administrator role. `monitoring.integration.allowedGroup` can override it.
 
 `deploy.sh` applies the bundled Prometheus Operator CRDs before Helm. This
 handles both adding monitoring to an existing release and future CRD schema
@@ -369,12 +474,13 @@ generated once and retained across upgrades.
 
 ## Identity and Access
 
-LLDAP is the authoritative directory. Nextcloud authenticates directly against
-LDAP; Keycloak federates the same users and groups for OIDC clients.
+The selected embedded or external LDAP directory is authoritative. Nextcloud
+authenticates directly against it; Keycloak federates the same users and groups
+for OIDC clients.
 
-- `nc-users` permits Nextcloud login
-- `nc-admin` maps to Nextcloud administrators
-- phpMyAdmin's OAuth2 proxy admits only `nc-admin`
+- `identityDirectory.groups.users` permits Nextcloud login
+- `identityDirectory.groups.admins` maps to Nextcloud administrators
+- phpMyAdmin and Grafana admit the configured administrators group by default
 - Roundcube uses Keycloak OIDC and XOAUTH2 for IMAP/SMTP
 
 Local Nextcloud recovery login remains available at:
@@ -383,8 +489,10 @@ Local Nextcloud recovery login remains available at:
 https://nc.<domain>/login?direct=1
 ```
 
-The LDAP bind account, mail service account and Dovecot master account are
-managed automatically and use generated credentials.
+Embedded mode manages the LDAP bind account and mail service account
+automatically. External mode expects its bind identity and both configured
+groups to exist. The Dovecot master account remains stack-managed in both
+modes.
 
 ## Storage
 

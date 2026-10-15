@@ -175,7 +175,7 @@ spec:
             - --redirect-url=https://{{ $host }}/oauth2/callback
             - --upstream=http://127.0.0.1:80/
             - --email-domain=*
-            - --allowed-group={{ .Values.phpmyadmin.auth.allowedGroup }}
+            - --allowed-group={{ default .Values.identityDirectory.groups.admins .Values.phpmyadmin.auth.allowedGroup }}
             - --oidc-groups-claim={{ .Values.keycloak.groupClaim }}
             - --scope=openid profile email
             - --code-challenge-method=S256

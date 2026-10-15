@@ -562,10 +562,13 @@ spec:
                 install_app spreed
                 php occ config:app:set spreed certificate_expiration_days --type=integer --value=2
 
+                # TCP 443 belongs to the HTTPS Gateway. The bundled Coturn
+                # service exposes UDP only, so remove the obsolete TLS entry
+                # left by older chart revisions before reconciling UDP TURN.
+                php occ talk:turn:delete turns "$TURN_HOST:$TURN_PORT" tcp >/dev/null 2>&1 || true
                 turn_servers=$(php occ talk:turn:list --output=plain)
                 if ! printf '%s\n' "$turn_servers" | grep server | grep -q " $TURN_HOST:$TURN_PORT"; then
                   php occ talk:turn:add turn "$TURN_HOST:$TURN_PORT" udp --secret="$TURN_SECRET"
-                  php occ talk:turn:add turns "$TURN_HOST:$TURN_PORT" tcp --secret="$TURN_SECRET"
                 fi
 
                 stun_servers=$(php occ talk:stun:list --output=plain)

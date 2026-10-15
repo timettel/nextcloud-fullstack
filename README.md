@@ -26,6 +26,8 @@ installations and upgrades.
 
 - Kubernetes with Gateway API CRDs
 - a GatewayClass matching `gateway.className` (default: `traefik`)
+- a LoadBalancer implementation supporting the TCP and UDP Services described
+  below
 - cert-manager
 - mariadb-operator and its CRDs
 - Elastic Cloud on Kubernetes (ECK)
@@ -37,13 +39,39 @@ installations and upgrades.
 The Windmill dependency is pinned in `Chart.lock`. Run `helm dependency build`
 when `charts/` is absent.
 
+### k3s
+
+The bundled Traefik controller in k3s does not enable its Gateway API provider
+by default. Create `/var/lib/rancher/k3s/server/manifests/traefik-config.yaml`
+on the server node before deploying the chart:
+
+```yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesGateway:
+        enabled: true
+```
+
+Wait until `kubectl get gatewayclass traefik` reports `Accepted=True`. No k3s
+port mapping is otherwise required. The default k3s ServiceLB implements
+`LoadBalancer` Services by reserving the corresponding host ports on cluster
+nodes. Consequently, every published port must be free on at least one node.
+When ServiceLB is disabled, provide another implementation such as MetalLB or
+an external load balancer.
+
 ## Operator Configuration
 
 The first block in `values.yaml`, `operator`, is the supported operator-facing
 configuration surface. It contains:
 
 - `domain`: DNS zone and mail domain
-- `publicIp`: address advertised by Coturn
+- `publicIp`: node-local or directly routed address advertised by Coturn
 - `subdomains`: endpoint labels below the DNS zone
 - `admins`: the three deliberately managed recovery credentials
 - `session`: shared idle, maximum and OIDC token lifetimes for the web clients
@@ -86,12 +114,47 @@ Create records for the configured subdomains or provide a wildcard record for
 - `grafana.<domain>`: Grafana monitoring
 - `windmill.<domain>`: Windmill
 - `talk.<domain>` and `recording.<domain>`: Talk backends
-- `turn.<domain>`: TURN UDP/TLS on port 443
+- `turn.<domain>`: TURN over UDP on `talk.turnPort` (443 by default)
 - `mail.<domain>`: SMTP, IMAPS and ManageSieve
 
 The mail service also requires the appropriate MX, SPF, DKIM and DMARC records.
-Expose the configured Talk relay range and the mail service ports according to
-the cluster's LoadBalancer implementation and firewall policy.
+
+HTTP endpoints use Gateway API and do not expose a separate Service for every
+hostname. Mail and TURN are Layer-4 services outside that Gateway:
+
+| Component | Service | Required external ports |
+| --- | --- | --- |
+| Traefik Gateway | `LoadBalancer` | TCP 80 and 443 |
+| Coturn listener | `LoadBalancer` | UDP `talk.turnPort` (default 443) |
+| Coturn media relay | `hostNetwork` | UDP `talk.relayPortMin` through `talk.relayPortMax` |
+| Postfix/Dovecot | `mail.service.type` | TCP 25, 465, 587 and 993; optionally 4190 |
+
+The cluster must provide a `LoadBalancer` implementation for both TCP and UDP.
+An `EXTERNAL-IP` remaining `pending`, or an implementation that supports TCP
+only, requires a cloud load balancer, MetalLB or equivalent cluster-specific
+configuration. Firewalls and cloud security groups must allow the same ports.
+Using UDP 443 for TURN does not conflict with the HTTPS listener on TCP 443.
+
+The bundled Coturn deployment currently targets bare-metal and self-managed
+clusters: it uses `hostNetwork`, binds `operator.publicIp` directly and exposes
+the relay range from its scheduled node. That address must therefore exist on,
+or be routed directly to, the node running Coturn. This works on the single-node
+k3s reference deployment without additional k3s configuration. A multi-node or
+managed-cloud deployment should dedicate and select a TURN node with the public
+address, or use an external TURN service. The chart currently publishes TURN
+over UDP only; TCP/TLS TURN on port 443 would require a separate public address
+or a compatible Layer-4 multiplexer because Traefik already owns TCP 443.
+
+Before exposing the installation, verify the assignments and listeners:
+
+```bash
+kubectl get gatewayclass,gateway -A
+kubectl get service -A | grep LoadBalancer
+kubectl get pods -A -l svccontroller.k3s.cattle.io/svcname
+```
+
+The final command is specific to the built-in k3s ServiceLB and may return no
+objects on other Kubernetes distributions.
 
 ## Monitoring
 

@@ -6,7 +6,9 @@
 operator:
   # Required: public DNS zone used for every endpoint and for the mail domain.
   domain: example.com
-  # Required when Talk is enabled: public IPv4/IPv6 address advertised by TURN.
+  # Required when Talk is enabled: node-local or directly routed public address
+  # advertised by the bundled hostNetwork Coturn deployment. Managed clusters
+  # commonly need a dedicated TURN node/address or an external TURN service.
   publicIp: 203.0.113.10
   # Optional ACME account contact. Empty is accepted by Let's Encrypt.
   acmeEmail: ""

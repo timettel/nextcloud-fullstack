@@ -59,7 +59,7 @@ Enabled integrations
 {{- end }}
 {{- if .Values.talk.enabled }}
   Talk HPB:    https://{{ include "nextcloud-stack.host" (list . "talk") }}/standalone-signaling/
-  TURN:        {{ include "nextcloud-stack.host" (list . "turn") }}:{{ .Values.talk.turnPort }} (UDP/TLS)
+  TURN:        {{ include "nextcloud-stack.host" (list . "turn") }}:{{ .Values.talk.turnPort }} (UDP)
 {{- if .Values.talk.recording.enabled }}
   Recording:   https://{{ include "nextcloud-stack.host" (list . "recording") }}/
 {{- end }}

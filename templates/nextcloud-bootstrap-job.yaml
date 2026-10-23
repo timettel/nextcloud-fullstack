@@ -2,6 +2,10 @@
 {{- $skeletonTag := default $generatedSkeletonTag .Values.nextcloud.skeleton.image.tag -}}
 {{- $embeddedDirectory := eq (include "nextcloud-stack.identityMode" .) "embedded" -}}
 {{- $ldapCaEnabled := or $embeddedDirectory (not (empty .Values.identityDirectory.external.trustedCa.secretName)) -}}
+{{- $indexReplicas := int .Values.fulltextsearch.elasticsearch.indexReplicas -}}
+{{- if eq $indexReplicas -1 -}}
+{{- $indexReplicas = ternary 1 0 (gt (int .Values.fulltextsearch.elasticsearch.replicas) 1) -}}
+{{- end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -488,12 +492,10 @@ spec:
                   php occ fulltextsearch:index '{"errors":"reset"}' --no-readline
                   touch data/fts-index.done
                 fi
-                {{- if eq (int .Values.fulltextsearch.elasticsearch.replicas) 1 }}
                 curl -fsS -u "elastic:$ELASTIC_PASSWORD" -X PUT \
                   -H 'Content-Type: application/json' \
-                  -d '{"index":{"number_of_replicas":0}}' \
+                  -d '{"index":{"number_of_replicas":{{ $indexReplicas }}}}' \
                   "$ELASTIC_URL/$ELASTIC_INDEX/_settings" >/dev/null
-                {{- end }}
                 echo "Nextcloud full-text search is connected to Elasticsearch"
               fi
 

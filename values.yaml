@@ -96,6 +96,14 @@ helperResources:
     memory: 256Mi
 nextcloud:
   replicas: 2
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  disruptionBudget:
+    enabled: true
+    minAvailable: 1
   image:
     repository: nextcloud
     tag: 35.0.1-apache
@@ -121,6 +129,10 @@ nextcloud:
       objectPrefix: ""
   scheduling:
     topologyKey: kubernetes.io/hostname
+    zoneSpread:
+      enabled: false
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
   phpSession:
     enabled: true
     redisDatabase: 2
@@ -243,6 +255,10 @@ mariadb:
     replicaThreads: 4
   scheduling:
     topologyKey: kubernetes.io/hostname
+    zoneSpread:
+      enabled: false
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
   resources:
     requests:
       cpu: 200m
@@ -270,6 +286,10 @@ redis:
   appendOnly: true
   scheduling:
     topologyKey: kubernetes.io/hostname
+    zoneSpread:
+      enabled: false
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
   sentinel:
     masterSet: nextcloud
     # 0 derives a strict majority from redis.replicas: floor(n / 2) + 1.
@@ -723,6 +743,8 @@ fulltextsearch:
     version: "9.5.5"
     # 1 runs a standalone search node; 3 or more enables a cluster.
     replicas: 3
+    # -1 derives 0 for one node and 1 for clustered search; override if needed.
+    indexReplicas: -1
     index: nextcloud
     storage: 20Gi
     storageClass: ""
@@ -730,6 +752,10 @@ fulltextsearch:
       topologyKey: kubernetes.io/hostname
       # Set by values-test.yaml or values-prod.yaml.
       antiAffinity: ""
+      zoneSpread:
+        enabled: false
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
     resources:
       requests:
         cpu: 250m

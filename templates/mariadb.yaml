@@ -57,6 +57,15 @@ spec:
     long_query_time={{ .Values.mariadb.slowQueryLog.longQueryTime }}
     log_output=FILE
   {{- if gt $mariadbReplicas 1 }}
+  {{- if .Values.mariadb.scheduling.zoneSpread.enabled }}
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: {{ .Values.mariadb.scheduling.zoneSpread.topologyKey | quote }}
+      whenUnsatisfiable: {{ .Values.mariadb.scheduling.zoneSpread.whenUnsatisfiable }}
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/instance: {{ include "nextcloud-stack.fullname" . }}-mariadb
+  {{- end }}
   affinity:
     {{- if eq .Values.deploymentProfile "prod" }}
     antiAffinityEnabled: true

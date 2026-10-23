@@ -1,0 +1,39 @@
+{{- if .Values.nextcloud.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+  labels:
+    app.kubernetes.io/component: nextcloud
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+  minReplicas: {{ .Values.nextcloud.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.nextcloud.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.nextcloud.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if and .Values.nextcloud.disruptionBudget.enabled (gt (ternary (int .Values.nextcloud.autoscaling.minReplicas) (int .Values.nextcloud.replicas) .Values.nextcloud.autoscaling.enabled) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-nextcloud
+  labels:
+    app.kubernetes.io/component: nextcloud
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.nextcloud.disruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: nextcloud
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

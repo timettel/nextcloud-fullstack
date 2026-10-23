@@ -18,6 +18,13 @@ case "$profile" in
 esac
 
 value_files=(values.yaml "values-${profile}.yaml")
+if [[ -n "${VALUES_OVERLAY:-}" ]]; then
+  if [[ ! -f "$VALUES_OVERLAY" ]]; then
+    echo "VALUES_OVERLAY does not exist: $VALUES_OVERLAY" >&2
+    exit 1
+  fi
+  value_files+=("$VALUES_OVERLAY")
+fi
 if [[ -f values-local.yaml ]]; then
   value_files+=(values-local.yaml)
 fi

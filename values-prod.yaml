@@ -7,15 +7,23 @@ nextcloud:
     accessMode: ReadWriteMany
   scheduling:
     antiAffinity: required
+    zoneSpread:
+      enabled: true
 
 redis:
   scheduling:
     antiAffinity: required
+    zoneSpread:
+      enabled: true
 
 mariadb:
-  scheduling: {}
+  scheduling:
+    zoneSpread:
+      enabled: true
 
 fulltextsearch:
   elasticsearch:
     scheduling:
       antiAffinity: required
+      zoneSpread:
+        enabled: true

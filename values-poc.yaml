@@ -1,0 +1,44 @@
+# Apply after values-test.yaml. Keeps identity and Office integrations, but
+# reduces the data services and omits optional heavyweight integrations.
+nextcloud:
+  replicas: 1
+  storage: 20Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+mariadb:
+  replicas: 1
+  storage: 5Gi
+
+redis:
+  replicas: 1
+  storage: 1Gi
+
+fulltextsearch:
+  elasticsearch:
+    replicas: 1
+    storage: 5Gi
+
+monitoring:
+  enabled: false
+workflowengine:
+  enabled: false
+appApi:
+  enabled: false
+talk:
+  enabled: false
+mail:
+  enabled: false
+roundcube:
+  enabled: false
+phpmyadmin:
+  enabled: false
+whiteboard:
+  enabled: false
+clamav:
+  enabled: false

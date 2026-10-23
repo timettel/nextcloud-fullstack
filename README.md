@@ -7,7 +7,7 @@ jobs.
 
 ## Included Components
 
-- Nextcloud with two web replicas, Redis-backed sessions and background jobs
+- Nextcloud with configurable web replicas, optional HPA, Redis-backed sessions and background jobs
 - MariaDB standalone or Galera, managed by mariadb-operator
 - Redis standalone or Sentinel with HAProxy
 - Elasticsearch standalone or clustered, managed by ECK
@@ -344,6 +344,23 @@ Exactly one profile must be selected:
 - `values-prod.yaml`: requires anti-affinity across nodes and uses RWX for the
   Nextcloud application volume
 
+For a smaller integration installation, add `values-poc.yaml` after the test
+profile. It sets Nextcloud, MariaDB, Redis and Elasticsearch to one replica and
+disables monitoring, workflow, Talk, mail, Roundcube, phpMyAdmin, Whiteboard
+and ClamAV. Identity, Office and full-text search remain available. These are
+independent overrides: any component can be restored to its clustered count
+without changing the others.
+
+```bash
+helm lint . -f values-test.yaml -f values-poc.yaml
+VALUES_OVERLAY=values-poc.yaml DEPLOYMENT_PROFILE=test ./deploy.sh
+```
+
+For existing installations, inspect the proposed diff before changing a
+stateful service between standalone and clustered modes. A fresh POC release
+with new PVCs is the simplest route; do not use this overlay to convert an
+existing Galera database in place.
+
 Production therefore requires at least three schedulable nodes for MariaDB,
 Redis and Elasticsearch, plus a StorageClass capable of RWX volumes.
 
@@ -369,8 +386,44 @@ an existing Galera deployment to standalone, or vice versa, changes database
 topology and must not be treated as an ordinary in-place Helm upgrade. Redeploy
 with fresh volumes or perform a planned data migration. The same caution applies
 to changing an existing Redis HA deployment to standalone. Changing an existing
-Elasticsearch cluster's node count requires planning index replicas and data
-placement separately.
+Elasticsearch cluster's node count requires planning data placement separately.
+The Nextcloud full-text index replica count is reconciled on each bootstrap:
+`fulltextsearch.elasticsearch.indexReplicas: -1` derives zero for a single
+node and one for multiple nodes. Set an explicit count from zero through
+`elasticsearch.replicas - 1` to override it.
+
+### Web scaling and storage
+
+`nextcloud.replicas` controls a fixed web Pod count. Set
+`nextcloud.autoscaling.enabled: true` for CPU-based HPA instead; then
+`minReplicas`, `maxReplicas` and `targetCPUUtilizationPercentage` control
+scaling. CPU requests are required for this metric. With HPA above one Pod,
+Redis-backed PHP sessions and `ReadWriteMany` storage are required. A
+PodDisruptionBudget is created only when the fixed count or HPA minimum exceeds
+one. The bootstrap and cron jobs remain single-instance.
+
+The Nextcloud PVC holds application code, configuration and local app data. A
+single web Pod can use `ReadWriteOnce`; the single-node test profile can also
+co-locate fixed replicas on one RWO volume. Distributed web Pods need an RWX
+StorageClass, even when `nextcloud.objectStore.enabled` puts user file content
+in S3. Primary S3 is an installation-time decision, not an in-place migration
+from filesystem-backed primary storage. PVC access mode is likewise not
+changed safely by editing an existing claim.
+
+### Failure domains
+
+The production profile requires distinct nodes for clustered components and
+enables optional zone spread for Nextcloud, MariaDB, Redis and Elasticsearch.
+Zone spreading uses `topology.kubernetes.io/zone` and `ScheduleAnyway` by
+default, so clusters without zone labels still schedule. On a suitably labeled
+multi-zone cluster, use each component's `scheduling.zoneSpread` block with
+`whenUnsatisfiable: DoNotSchedule` for strict balance across the zones Kubernetes
+can see. For Elasticsearch this also enables ECK's native shard-allocation zone
+awareness; it requires an ECK version whose CRD supports `zoneAwareness`.
+MariaDB's operator and ECK manage their own disruption budgets; this chart
+adds budgets for multi-replica Nextcloud and Redis. If you need to require a
+specific number of zones, enforce that at the cluster/node-pool level too:
+spread constraints alone do not create missing zones.
 
 In clustered mode, Redis Sentinel derives its quorum automatically from `redis.replicas` using a
 strict majority (`floor(replicas / 2) + 1`). Keep
@@ -381,7 +434,7 @@ The following settings are intentionally not inferred from replica counts:
 
 - CPU and memory requests or limits
 - Galera buffer sizes and replication threads
-- Elasticsearch shard and index-replica counts
+- Elasticsearch shard counts
 - Redis proxy replicas
 - storage capacity per replica
 
@@ -436,8 +489,8 @@ hostname from the operator block and runs the Helm upgrade.
 DEPLOYMENT_PROFILE=test ./deploy.sh
 ```
 
-The effective values order is `values.yaml`, `values-<profile>.yaml`, then the
-optional ignored `values-local.yaml`.
+The effective values order is `values.yaml`, `values-<profile>.yaml`, optional
+`VALUES_OVERLAY`, then the ignored `values-local.yaml` if present.
 
 Useful environment overrides:
 
@@ -461,6 +514,7 @@ SKELETON_PUBLISH_MODE=push \
 Validate changes before an upgrade:
 
 ```bash
+tests/render-topologies.sh
 helm lint . -f values-test.yaml
 helm template nc-lab . \
   --namespace nextcloud-lab \

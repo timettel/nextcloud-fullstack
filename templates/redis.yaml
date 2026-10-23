@@ -76,6 +76,16 @@ spec:
         app.kubernetes.io/component: redis
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      {{- if and (gt $redisReplicas 1) .Values.redis.scheduling.zoneSpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: {{ .Values.redis.scheduling.zoneSpread.topologyKey | quote }}
+          whenUnsatisfiable: {{ .Values.redis.scheduling.zoneSpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: redis
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- end }}
       affinity:
         podAntiAffinity:
           {{- if eq $antiAffinity "required" }}
@@ -273,6 +283,16 @@ spec:
         app.kubernetes.io/component: redis-proxy
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      {{- if .Values.redis.scheduling.zoneSpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: {{ .Values.redis.scheduling.zoneSpread.topologyKey | quote }}
+          whenUnsatisfiable: {{ .Values.redis.scheduling.zoneSpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: redis-proxy
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- end }}
       affinity:
         podAntiAffinity:
           {{- if eq $antiAffinity "required" }}
@@ -389,4 +409,34 @@ spec:
       volumes:
         - name: config
           emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-redis
+  labels:
+    app.kubernetes.io/component: redis
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if gt (int .Values.redis.proxy.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-redis-proxy
+  labels:
+    app.kubernetes.io/component: redis-proxy
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis-proxy
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
 {{- end }}

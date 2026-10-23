@@ -2,8 +2,35 @@
 {{- if not (has $antiAffinity (list "preferred" "required")) }}
 {{- fail "nextcloud.scheduling.antiAffinity must be preferred or required" }}
 {{- end }}
-{{- if and (eq .Values.deploymentProfile "prod") (ne .Values.nextcloud.persistence.accessMode "ReadWriteMany") }}
-{{- fail "production Nextcloud replicas on separate nodes require nextcloud.persistence.accessMode=ReadWriteMany" }}
+{{- $webMinReplicas := int .Values.nextcloud.replicas }}
+{{- $webMaxReplicas := $webMinReplicas }}
+{{- if .Values.nextcloud.autoscaling.enabled }}
+{{- $webMinReplicas = int .Values.nextcloud.autoscaling.minReplicas }}
+{{- $webMaxReplicas = int .Values.nextcloud.autoscaling.maxReplicas }}
+{{- if or (lt $webMinReplicas 1) (lt $webMaxReplicas $webMinReplicas) }}
+{{- fail "nextcloud.autoscaling requires minReplicas >= 1 and maxReplicas >= minReplicas" }}
+{{- end }}
+{{- if or (lt (int .Values.nextcloud.autoscaling.targetCPUUtilizationPercentage) 1) (gt (int .Values.nextcloud.autoscaling.targetCPUUtilizationPercentage) 100) }}
+{{- fail "nextcloud.autoscaling.targetCPUUtilizationPercentage must be between 1 and 100" }}
+{{- end }}
+{{- end }}
+{{- if lt $webMinReplicas 1 }}
+{{- fail "nextcloud.replicas must be at least 1" }}
+{{- end }}
+{{- if and .Values.nextcloud.autoscaling.enabled (gt $webMaxReplicas 1) (ne .Values.nextcloud.persistence.accessMode "ReadWriteMany") }}
+{{- fail "Nextcloud autoscaling above one replica requires nextcloud.persistence.accessMode=ReadWriteMany" }}
+{{- end }}
+{{- if and (gt $webMaxReplicas 1) (not .Values.nextcloud.phpSession.enabled) }}
+{{- fail "Multiple Nextcloud web replicas require Redis-backed PHP sessions" }}
+{{- end }}
+{{- if and .Values.nextcloud.disruptionBudget.enabled (gt $webMinReplicas 1) (or (lt (int .Values.nextcloud.disruptionBudget.minAvailable) 1) (ge (int .Values.nextcloud.disruptionBudget.minAvailable) $webMinReplicas)) }}
+{{- fail "nextcloud.disruptionBudget.minAvailable must be between 1 and minReplicas - 1" }}
+{{- end }}
+{{- if and (gt $webMaxReplicas 1) (or (eq $antiAffinity "required") (eq .Values.deploymentProfile "prod")) (ne .Values.nextcloud.persistence.accessMode "ReadWriteMany") }}
+{{- fail "Nextcloud replicas on separate nodes require nextcloud.persistence.accessMode=ReadWriteMany" }}
+{{- end }}
+{{- if not (has .Values.nextcloud.persistence.accessMode (list "ReadWriteOnce" "ReadWriteMany")) }}
+{{- fail "nextcloud.persistence.accessMode must be ReadWriteOnce or ReadWriteMany" }}
 {{- end }}
 {{- $sessionIdle := int .Values.operator.session.idleTimeoutSeconds }}
 {{- $sessionMax := int .Values.operator.session.maxLifespanSeconds }}
@@ -65,7 +92,9 @@ metadata:
     app.kubernetes.io/component: nextcloud
     {{- include "nextcloud-stack.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.nextcloud.autoscaling.enabled }}
   replicas: {{ .Values.nextcloud.replicas }}
+  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -83,6 +112,16 @@ spec:
         app.kubernetes.io/component: nextcloud
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      {{- if .Values.nextcloud.scheduling.zoneSpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: {{ .Values.nextcloud.scheduling.zoneSpread.topologyKey | quote }}
+          whenUnsatisfiable: {{ .Values.nextcloud.scheduling.zoneSpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: nextcloud
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- end }}
       affinity:
         podAntiAffinity:
           {{- if eq $antiAffinity "required" }}

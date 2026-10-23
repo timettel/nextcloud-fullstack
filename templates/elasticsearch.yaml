@@ -7,6 +7,9 @@
 {{- if and (ne $elasticsearchReplicas 1) (lt $elasticsearchReplicas 3) }}
 {{- fail "fulltextsearch.elasticsearch.replicas must be 1 (standalone) or at least 3 (clustered)" }}
 {{- end }}
+{{- if or (lt (int .Values.fulltextsearch.elasticsearch.indexReplicas) -1) (ge (int .Values.fulltextsearch.elasticsearch.indexReplicas) $elasticsearchReplicas) }}
+{{- fail "fulltextsearch.elasticsearch.indexReplicas must be -1 (automatic) or between 0 and replicas - 1" }}
+{{- end }}
 apiVersion: elasticsearch.k8s.elastic.co/v1
 kind: Elasticsearch
 metadata:
@@ -23,6 +26,10 @@ spec:
   nodeSets:
     - name: default
       count: {{ $elasticsearchReplicas }}
+      {{- if and (gt $elasticsearchReplicas 1) .Values.fulltextsearch.elasticsearch.scheduling.zoneSpread.enabled (eq .Values.fulltextsearch.elasticsearch.scheduling.zoneSpread.whenUnsatisfiable "DoNotSchedule") }}
+      zoneAwareness:
+        topologyKey: {{ .Values.fulltextsearch.elasticsearch.scheduling.zoneSpread.topologyKey | quote }}
+      {{- end }}
       config:
         node.roles: [master, data, ingest]
         indices.fielddata.cache.size: 20%
@@ -34,6 +41,15 @@ spec:
             app.kubernetes.io/component: elasticsearch
             app.kubernetes.io/instance: {{ .Release.Name }}
         spec:
+          {{- if and (gt $elasticsearchReplicas 1) .Values.fulltextsearch.elasticsearch.scheduling.zoneSpread.enabled }}
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: {{ .Values.fulltextsearch.elasticsearch.scheduling.zoneSpread.topologyKey | quote }}
+              whenUnsatisfiable: {{ .Values.fulltextsearch.elasticsearch.scheduling.zoneSpread.whenUnsatisfiable }}
+              labelSelector:
+                matchLabels:
+                  elasticsearch.k8s.elastic.co/cluster-name: {{ include "nextcloud-stack.fullname" . }}-elasticsearch
+          {{- end }}
           affinity:
             podAntiAffinity:
               {{- if eq $antiAffinity "required" }}

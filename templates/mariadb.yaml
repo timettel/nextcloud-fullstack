@@ -2,8 +2,8 @@
 {{- fail "Select exactly one environment profile with -f values-test.yaml or -f values-prod.yaml" }}
 {{- end }}
 {{- $mariadbReplicas := int .Values.mariadb.replicas }}
-{{- if lt $mariadbReplicas 3 }}
-{{- fail "mariadb.replicas must be at least 3 for Galera quorum" }}
+{{- if and (ne $mariadbReplicas 1) (lt $mariadbReplicas 3) }}
+{{- fail "mariadb.replicas must be 1 (standalone) or at least 3 (Galera)" }}
 {{- end }}
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: MariaDB
@@ -28,17 +28,21 @@ spec:
   storage:
     size: {{ .Values.mariadb.storage }}
   galera:
-    enabled: true
+    enabled: {{ gt $mariadbReplicas 1 }}
+    {{- if gt $mariadbReplicas 1 }}
     sst: mariabackup
     replicaThreads: {{ .Values.mariadb.galera.replicaThreads }}
     recovery:
       enabled: true
+    {{- end }}
   myCnf: |
     [mariadb]
     bind-address=*
     default_storage_engine=InnoDB
+    {{- if gt $mariadbReplicas 1 }}
     binlog_format=row
     innodb_autoinc_lock_mode=2
+    {{- end }}
     transaction-isolation=READ-COMMITTED
     innodb_file_per_table=1
     max_allowed_packet=1G
@@ -52,6 +56,7 @@ spec:
     slow_query_log_file={{ .Values.mariadb.slowQueryLog.file }}
     long_query_time={{ .Values.mariadb.slowQueryLog.longQueryTime }}
     log_output=FILE
+  {{- if gt $mariadbReplicas 1 }}
   affinity:
     {{- if eq .Values.deploymentProfile "prod" }}
     antiAffinityEnabled: true
@@ -70,6 +75,7 @@ spec:
     {{- end }}
   podDisruptionBudget:
     maxUnavailable: 1
+  {{- end }}
   updateStrategy:
     type: ReplicasFirstPrimaryLast
     mariadbAutoUpgradeEnabled: true

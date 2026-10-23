@@ -8,9 +8,9 @@ jobs.
 ## Included Components
 
 - Nextcloud with two web replicas, Redis-backed sessions and background jobs
-- MariaDB Galera with three members, managed by mariadb-operator
-- Redis Sentinel with three members and HAProxy
-- Elasticsearch with three members, managed by ECK
+- MariaDB standalone or Galera, managed by mariadb-operator
+- Redis standalone or Sentinel with HAProxy
+- Elasticsearch standalone or clustered, managed by ECK
 - EuroOffice, Full Text Search, notify_push, ClamAV and Whiteboard
 - Talk HPB, Coturn and Talk Recording
 - AppAPI HaRP and the Windmill workflow engine
@@ -349,14 +349,30 @@ Redis and Elasticsearch, plus a StorageClass capable of RWX volumes.
 
 ## Cluster Sizing
 
-MariaDB, Redis and the default Elasticsearch node set accept any replica count
-of at least three. Odd counts are recommended because an even count does not
+Set `mariadb.replicas`, `redis.replicas` and
+`fulltextsearch.elasticsearch.replicas` independently to `1` for standalone
+operation. MariaDB then omits Galera; Redis omits Sentinel and HAProxy while
+keeping its Service name; Elasticsearch runs as a single node, and the
+Nextcloud search index uses zero replicas. The defaults remain three nodes per
+component. Values of two are rejected; three or more enable clustered mode.
+
+MariaDB, Redis and the default Elasticsearch node set accept any clustered
+replica count of at least three. Odd counts are recommended because an even count does not
 normally add failure tolerance over the preceding odd count. In the production
 profile, required pod anti-affinity places replicas of the same component on
 distinct Kubernetes nodes. Dynamic volume provisioning creates one PVC per
 stateful replica.
 
-Redis Sentinel derives its quorum automatically from `redis.replicas` using a
+The test profile permits co-location but does not implicitly change replica
+counts. For a small deployment, set the desired component counts explicitly. Switching
+an existing Galera deployment to standalone, or vice versa, changes database
+topology and must not be treated as an ordinary in-place Helm upgrade. Redeploy
+with fresh volumes or perform a planned data migration. The same caution applies
+to changing an existing Redis HA deployment to standalone. Changing an existing
+Elasticsearch cluster's node count requires planning index replicas and data
+placement separately.
+
+In clustered mode, Redis Sentinel derives its quorum automatically from `redis.replicas` using a
 strict majority (`floor(replicas / 2) + 1`). Keep
 `redis.sentinel.quorum: 0` for this behavior. An explicit value remains
 available for unusual topologies and is validated against the replica count.

@@ -8,11 +8,13 @@
 {{- if not (has $antiAffinity (list "preferred" "required")) }}
 {{- fail "redis.scheduling.antiAffinity must be preferred or required" }}
 {{- end }}
-{{- if lt $redisReplicas 3 }}
-{{- fail "redis.replicas must be at least 3 for Sentinel quorum and failover" }}
+{{- if and (ne $redisReplicas 1) (lt $redisReplicas 3) }}
+{{- fail "redis.replicas must be 1 (standalone) or at least 3 (Sentinel)" }}
 {{- end }}
+{{- if gt $redisReplicas 1 }}
 {{- if or (lt $sentinelQuorum 1) (gt $sentinelQuorum $redisReplicas) }}
 {{- fail "redis.sentinel.quorum must be 0 for automatic majority or between 1 and redis.replicas" }}
+{{- end }}
 {{- end }}
 apiVersion: v1
 kind: Service
@@ -31,20 +33,22 @@ spec:
     - name: redis
       port: 6379
       targetPort: redis
+    {{- if gt $redisReplicas 1 }}
     - name: sentinel
       port: 26379
       targetPort: sentinel
+    {{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "nextcloud-stack.fullname" . }}-redis
   labels:
-    app.kubernetes.io/component: redis-proxy
+    app.kubernetes.io/component: {{ ternary "redis-proxy" "redis" (gt $redisReplicas 1) }}
     {{- include "nextcloud-stack.labels" . | nindent 4 }}
 spec:
   selector:
-    app.kubernetes.io/component: redis-proxy
+    app.kubernetes.io/component: {{ ternary "redis-proxy" "redis" (gt $redisReplicas 1) }}
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: redis
@@ -99,6 +103,7 @@ spec:
           args:
             - |
               set -eu
+              {{- if gt $redisReplicas 1 }}
               ordinal="${HOSTNAME##*-}"
               master_host=""
 
@@ -117,22 +122,27 @@ spec:
               if [ -z "$master_host" ] && [ "$ordinal" != "0" ]; then
                 master_host="{{ include "nextcloud-stack.fullname" . }}-redis-0.{{ include "nextcloud-stack.fullname" . }}-redis-headless"
               fi
+              {{- end }}
 
               {
                 echo 'bind 0.0.0.0'
                 echo 'protected-mode yes'
                 echo 'port 6379'
                 printf 'requirepass "%s"\n' "$REDIS_PASSWORD"
+                {{- if gt $redisReplicas 1 }}
                 printf 'masterauth "%s"\n' "$REDIS_PASSWORD"
+                {{- end }}
                 echo 'dir /data/redis'
                 echo 'appendonly {{ ternary "yes" "no" .Values.redis.appendOnly }}'
                 echo 'appendfsync everysec'
+                {{- if gt $redisReplicas 1 }}
                 echo 'repl-diskless-sync yes'
                 printf 'replica-announce-ip %s.%s\n' "$HOSTNAME" "$REDIS_HEADLESS_SERVICE"
                 echo 'replica-announce-port 6379'
                 if [ -n "$master_host" ] && [ "${master_host%%.*}" != "$HOSTNAME" ]; then
                   printf 'replicaof %s 6379\n' "$master_host"
                 fi
+                {{- end }}
               } > /tmp/redis.conf
 
               mkdir -p /data/redis
@@ -143,10 +153,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "nextcloud-stack.fullname" . }}
                   key: redis-password
+            {{- if gt $redisReplicas 1 }}
             - name: REDIS_MASTER_SET
               value: {{ .Values.redis.sentinel.masterSet | quote }}
             - name: REDIS_HEADLESS_SERVICE
               value: {{ include "nextcloud-stack.fullname" . }}-redis-headless
+            {{- end }}
           ports:
             - name: redis
               containerPort: 6379
@@ -165,6 +177,7 @@ spec:
               mountPath: /data
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
+        {{- if gt $redisReplicas 1 }}
         - name: sentinel
           image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
           imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
@@ -227,6 +240,7 @@ spec:
               mountPath: /data
           resources:
             {{- toYaml .Values.redis.sentinel.resources | nindent 12 }}
+        {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -238,6 +252,7 @@ spec:
         resources:
           requests:
             storage: {{ .Values.redis.storage }}
+{{- if gt $redisReplicas 1 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -374,3 +389,4 @@ spec:
       volumes:
         - name: config
           emptyDir: {}
+{{- end }}

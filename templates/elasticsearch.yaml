@@ -4,8 +4,8 @@
 {{- if not (has $antiAffinity (list "preferred" "required")) }}
 {{- fail "fulltextsearch.elasticsearch.scheduling.antiAffinity must be preferred or required" }}
 {{- end }}
-{{- if lt $elasticsearchReplicas 3 }}
-{{- fail "fulltextsearch.elasticsearch.replicas must be at least 3 for a highly available master-eligible node set" }}
+{{- if and (ne $elasticsearchReplicas 1) (lt $elasticsearchReplicas 3) }}
+{{- fail "fulltextsearch.elasticsearch.replicas must be 1 (standalone) or at least 3 (clustered)" }}
 {{- end }}
 apiVersion: elasticsearch.k8s.elastic.co/v1
 kind: Elasticsearch

@@ -224,6 +224,7 @@ mariadb:
     repository: mariadb
     tag: "12.3.3"
     pullPolicy: IfNotPresent
+  # 1 runs standalone without Galera; 3 or more enables Galera.
   replicas: 3
   database: nextcloud
   username: nextcloud
@@ -258,6 +259,7 @@ mariadb:
         cpu: 250m
         memory: 256Mi
 redis:
+  # 1 runs standalone without Sentinel/HAProxy; 3 or more enables both.
   replicas: 3
   image:
     repository: redis
@@ -719,6 +721,7 @@ fulltextsearch:
   # The Nextcloud 35 connector contains clients for Elasticsearch 8 and 9.
   elasticsearch:
     version: "9.5.5"
+    # 1 runs a standalone search node; 3 or more enables a cluster.
     replicas: 3
     index: nextcloud
     storage: 20Gi

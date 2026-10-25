@@ -1,0 +1,12 @@
+# Single-node data services for the fsn-lab integration deployment.
+# Apply after values-test.yaml; all other modules stay enabled.
+# values-local.yaml must not override these replica counts when using deploy.sh.
+mariadb:
+  replicas: 1
+
+redis:
+  replicas: 1
+
+fulltextsearch:
+  elasticsearch:
+    replicas: 1

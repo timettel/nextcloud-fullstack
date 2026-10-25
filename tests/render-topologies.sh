@@ -16,6 +16,7 @@ query() {
 }
 
 helm template nc-lab . -f values-test.yaml -f values-poc.yaml >"$tmpdir/poc.yaml"
+helm template nc-lab . -f values-test.yaml -f values-lab-single-node.yaml >"$tmpdir/lab-single-node.yaml"
 helm template nc-lab . -f values-prod.yaml \
   --set nextcloud.autoscaling.enabled=true >"$tmpdir/prod.yaml"
 helm template nc-lab . -f values-test.yaml \
@@ -31,6 +32,12 @@ helm template nc-lab . -f values-prod.yaml \
 [[ "$(query '[select(.kind == "Deployment" and .metadata.name == "nc-lab-nextcloud-stack-redis-proxy")] | length' "$tmpdir/poc.yaml")" == 0 ]]
 [[ "$(query '[select(.kind == "HorizontalPodAutoscaler")] | length' "$tmpdir/poc.yaml")" == 0 ]]
 grep -q '"number_of_replicas":0' "$tmpdir/poc.yaml"
+
+[[ "$(query '[select(.kind == "MariaDB") | .spec.galera.enabled] | .[0]' "$tmpdir/lab-single-node.yaml")" == false ]]
+[[ "$(query '[select(.kind == "Elasticsearch") | .spec.nodeSets[0].count] | .[0]' "$tmpdir/lab-single-node.yaml")" == 1 ]]
+[[ "$(query '[select(.kind == "StatefulSet" and .metadata.name == "nc-lab-nextcloud-stack-redis") | .spec.template.spec.containers | length] | .[0]' "$tmpdir/lab-single-node.yaml")" == 1 ]]
+[[ "$(query '[select(.kind == "Deployment" and .metadata.name == "nc-lab-nextcloud-stack-talk")] | length' "$tmpdir/lab-single-node.yaml")" == 1 ]]
+grep -q '"number_of_replicas":0' "$tmpdir/lab-single-node.yaml"
 
 [[ "$(query '[select(.kind == "HorizontalPodAutoscaler") | .spec.minReplicas] | .[0]' "$tmpdir/prod.yaml")" == 2 ]]
 [[ "$(query '[select(.kind == "PodDisruptionBudget" and .metadata.name == "nc-lab-nextcloud-stack-nextcloud")] | length' "$tmpdir/prod.yaml")" == 1 ]]

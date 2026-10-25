@@ -356,10 +356,17 @@ helm lint . -f values-test.yaml -f values-poc.yaml
 VALUES_OVERLAY=values-poc.yaml DEPLOYMENT_PROFILE=test ./deploy.sh
 ```
 
-For existing installations, inspect the proposed diff before changing a
-stateful service between standalone and clustered modes. A fresh POC release
-with new PVCs is the simplest route; do not use this overlay to convert an
-existing Galera database in place.
+To keep the full integration stack but run only the three data services as
+single nodes, use `values-lab-single-node.yaml` instead. On an existing
+release, back up MariaDB first and switch services one at a time; reduce
+Elasticsearch index replicas to zero before scaling its NodeSet down. The
+Galera-to-standalone transition was exercised with mariadb-operator 26.10.1,
+but should not be assumed safe with other operator versions without a restore
+path. Retained MariaDB and Redis PVCs are not removed by the downscale.
+
+```bash
+VALUES_OVERLAY=values-lab-single-node.yaml DEPLOYMENT_PROFILE=test ./deploy.sh
+```
 
 Production therefore requires at least three schedulable nodes for MariaDB,
 Redis and Elasticsearch, plus a StorageClass capable of RWX volumes.
